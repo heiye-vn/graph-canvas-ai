@@ -1,0 +1,8 @@
+.git
+.env
+docs
+backend/.venv
+backend/.pytest_cache
+backend/.ruff_cache
+frontend/node_modules
+frontend/dist

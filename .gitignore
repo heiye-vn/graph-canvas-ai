@@ -1,0 +1,36 @@
+# 敏感信息与本地配置
+.env
+.env.local
+*.pem
+*.key
+
+# WorkBuddy 工作区数据（含会话记忆，不入库）
+.workbuddy/
+
+# 方案与过程文档，不入库
+docs/
+
+# 用户评测素材
+evals/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时数据
+.data/
+*.log
+
+# 系统与编辑器
+.DS_Store
+.idea/
+.vscode/
