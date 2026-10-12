@@ -25,7 +25,7 @@ docker compose up -d
 # 2) 后端（依赖可选；CV 体积大，M6 才需要）
 cd backend
 uv sync --extra dev                     # 或再加 --extra agent / --extra cv
-uvicorn app.main:app --port 7302 --reload
+uv run uvicorn app.main:app --port 7302 --reload
 
 # 3) 前端
 cd frontend
