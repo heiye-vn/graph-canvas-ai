@@ -20,18 +20,16 @@ from app.services.security import decode_access_token
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-async def get_current_user(
-    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
-    session: AsyncSession = Depends(get_session),
-) -> User:
-    if credentials is None:
+async def user_from_token(token: str | None, session: AsyncSession) -> User:
+    """令牌 → 用户。三条取 token 的通道共用这一处解析逻辑。"""
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="缺少访问令牌",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user_id: UUID | None = decode_access_token(credentials.credentials)
+    user_id: UUID | None = decode_access_token(token)
     if user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -44,6 +42,13 @@ async def get_current_user(
         # token 有效但用户已删除（资产级联删除的场景）
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户不存在")
     return user
+
+
+async def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    return await user_from_token(credentials.credentials if credentials else None, session)
 
 
 async def get_user_id_by_email(session: AsyncSession, email: str) -> UUID | None:

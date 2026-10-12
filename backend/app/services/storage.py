@@ -89,7 +89,11 @@ def presign_get(key: str, ttl: int = _PRESIGN_GET_TTL) -> str:
     )
 
 
-def presign_put(key: str, content_type: str = "application/octet-stream", ttl: int = _PRESIGN_PUT_TTL) -> str:
+def presign_put(
+    key: str,
+    content_type: str = "application/octet-stream",
+    ttl: int = _PRESIGN_PUT_TTL,
+) -> str:
     return _client().generate_presigned_url(
         "put_object",
         Params={"Bucket": bucket_name(), "Key": key, "ContentType": content_type},

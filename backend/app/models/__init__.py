@@ -14,8 +14,9 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
+from app.models.run import ToolRun
 
-__all__ = ["Base", "User", "Asset"]
+__all__ = ["Base", "User", "Asset", "ToolRun"]
 
 
 class User(Base):

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from os import getenv
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -30,8 +31,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("graph-canvas-ai")
 
-from os import getenv
-
 # 容器内由 Dockerfile COPY 到该路径；本地可用 FRONTEND_DIST 指向 frontend/dist 走同源托管
 FRONTEND_DIST = Path(getenv("FRONTEND_DIST", "/app/frontend/dist"))
 
@@ -48,8 +47,13 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        from app.services.events import close_redis
+        from app.services.queue import close_pool
+
+        await close_pool()
+        await close_redis()
         await dispose_engine()
-        logger.info("已关闭数据库连接池")
+        logger.info("已关闭数据库连接池与消息通道")
 
 
 def create_app() -> FastAPI:
@@ -78,10 +82,16 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
 
     # 业务路由统一挂 /api
-    from app.routers import assets, auth
+    from app.routers import assets, auth, runs
 
     app.include_router(auth.router, prefix=settings.api_prefix)
     app.include_router(assets.router, prefix=settings.api_prefix)
+    app.include_router(runs.router, prefix=settings.api_prefix)
+
+    # SSE 不挂业务前缀，便于反向代理单独关掉缓冲
+    from app.routers import events
+
+    app.include_router(events.router)
 
     _mount_frontend(app)
     return app

@@ -17,9 +17,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.services import storage
 from app.models import Asset
 from app.schemas.asset import AssetOut, ConfirmUploadRequest, UploadTicket, UploadTicketRequest
+from app.services import storage
 
 # 允许用户上传的图片类型白名单
 ALLOWED_FORMATS: dict[str, str] = {

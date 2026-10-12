@@ -86,4 +86,29 @@ async def _create_tables() -> None:
 def _database_schema(_test_env):
     pytest.importorskip("asyncpg")
     asyncio.run(_create_tables())
+
+    from app.services import storage
+
+    storage.ensure_bucket()  # 测试桶，与开发桶分开（S3_BUCKET=retouch-test）
     yield
+
+
+def run_async(coro):
+    """在独立事件循环里跑一段协程，结束后**释放连接池并清空单例**。
+
+    TestClient 在自己的 portal 里持有另一套 loop；如果异步测试复用同一个
+    asyncpg 连接池，就会跨 loop 复用连接而报错。这里的做法是：每次都开新 loop，
+    用完立刻 dispose 并把 engine 单例置空，让下一个用例重新建。
+    """
+    from app.db import dispose_engine
+
+    async def wrapper():
+        try:
+            return await coro
+        finally:
+            await dispose_engine()
+            from app.services.events import close_redis
+
+            await close_redis()
+
+    return asyncio.run(wrapper())

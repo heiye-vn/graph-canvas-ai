@@ -12,7 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import bcrypt
@@ -44,7 +44,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def create_access_token(user_id: uuid.UUID | str) -> str:
     settings = get_settings()
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     payload: dict[str, Any] = {
         "sub": str(user_id),
         "iat": int(now.timestamp()),
