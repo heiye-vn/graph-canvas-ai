@@ -58,6 +58,12 @@ export default function HomePage() {
         </div>
         <div className="flex items-center gap-2">
           <Link
+            to="/create"
+            className="rounded-control border border-line bg-paper px-3 py-1.5 text-xs text-ink shadow-control transition hover:border-brand"
+          >
+            生成图片
+          </Link>
+          <Link
             to="/editor"
             className="rounded-control border border-line bg-paper px-3 py-1.5 text-xs text-ink shadow-control transition hover:border-brand"
           >

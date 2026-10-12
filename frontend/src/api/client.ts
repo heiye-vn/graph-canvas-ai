@@ -50,7 +50,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init?.headers ?? {}),
+      ...init?.headers,
     },
     ...init,
   })

@@ -31,11 +31,15 @@ uv sync --extra dev        # + 测试与 lint
 
 ```bash
 uv run uvicorn app.main:app --port 7302 --reload     # API
-arq app.worker.WorkerSettings                 # 异步任务 worker（M2 起）
+uv run arq app.worker.WorkerSettings                 # 异步任务 worker（M2 起，必须与 API 同时跑）
 alembic revision --autogenerate -m "..."      # 生成迁移
 alembic upgrade head                          # 应用迁移
-pytest                                        # 测试
+pytest                                        # 测试（需要 PG / Redis / 对象存储在线）
 ```
+
+> 三条数据流（M2 定型）：HTTP 只负责**建任务并返回 202**；
+> worker 通过 Redis Pub/Sub 推进度；前端由 `/events/runs/{id}` 订阅。
+> 少跑 worker 的表现是任务永远停在 `queued` —— 不是接口坏了。
 
 ## 环境变量
 
