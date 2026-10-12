@@ -1,25 +1,50 @@
 @import 'tailwindcss';
 
 @theme {
-  --color-canvas-900: #0b0d12;
-  --color-canvas-800: #12151d;
-  --color-canvas-700: #1a1e29;
-  --color-canvas-600: #252b3a;
-  --color-canvas-500: #353d52;
-  --color-accent: #6366f1;
-  --color-accent-soft: #818cf8;
+  --font-sans:
+    system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+
+  --color-ink: #171917;
+  --color-muted: #6f746f;
+  --color-faint: #9aa09a;
+  --color-line: #e5e8e4;
+  --color-line-strong: #d7dbd6;
+  --color-paper: #ffffff;
+  --color-canvas: #eff1ee;
+  --color-soft: #f6f7f5;
+  --color-dark: #1e211e;
+
+  --color-brand: #5f98ad;
+  --color-brand-strong: #427f95;
+  --color-brand-soft: #e8f2f5;
+  --color-accent: #d9ff6e;
+
+  --color-danger: #d95656;
+  --color-success: #3b8a61;
+
+  --radius-card: 18px;
+  --radius-control: 12px;
+
+  --shadow-card: 0 16px 42px rgb(25 31 26 / 0.09);
+  --shadow-control: 0 8px 22px rgb(27 31 27 / 0.08);
 }
 
-html,
-body,
-#root {
-  height: 100%;
-}
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-body {
-  margin: 0;
-  background: var(--color-canvas-900);
-  color: #e6e8ee;
-  font-family: ui-sans-serif, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-  -webkit-font-smoothing: antialiased;
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+
+  :focus-visible {
+    @apply outline-brand outline-2 outline-offset-2;
+  }
 }

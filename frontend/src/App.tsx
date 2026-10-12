@@ -1,14 +1,40 @@
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
-import LandingPage from './pages/LandingPage'
-import EditorPage from './pages/EditorPage'
+import { useEffect } from 'react'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+
+import ProtectedRoute from '@/components/ProtectedRoute'
+import EditorPage from '@/pages/EditorPage'
+import HomePage from '@/pages/HomePage'
+import LoginPage from '@/pages/LoginPage'
+import { useAuthStore } from '@/stores/authStore'
 
 export default function App() {
+  const bootstrap = useAuthStore((s) => s.bootstrap)
+
+  useEffect(() => {
+    void bootstrap()
+  }, [bootstrap])
+
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/editor" element={<EditorPage />} />
-        <Route path="*" element={<LandingPage />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <HomePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/editor"
+          element={
+            <ProtectedRoute>
+              <EditorPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   )

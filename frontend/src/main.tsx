@@ -2,7 +2,12 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
+import { setUnauthorizedHandler } from './api/client'
+import { useAuthStore } from './stores/authStore'
 import './index.css'
+
+// 401 时同步退出登录态，让路由守卫把用户送回登录页
+setUnauthorizedHandler(() => useAuthStore.getState().signOut())
 
 const queryClient = new QueryClient({
   defaultOptions: {
