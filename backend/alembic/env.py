@@ -13,8 +13,9 @@ from sqlalchemy.engine import Connection
 
 from app.config import get_settings
 
-# 注册全部模型元数据（M1 起在此 import 各 models 模块）
-from app.db import Base  # noqa: F401
+# 注册全部模型元数据：必须从 app.models 导入（它会连带导入所有 ORM 类），
+# 只导入 Base 的话 metadata 是空的，autogenerate 会误判成「没有任何变更」
+from app.models import Base  # noqa: F401
 
 config = context.config
 target_metadata = Base.metadata
@@ -65,5 +66,6 @@ def main() -> None:
         asyncio.run(run_async_migrations())
 
 
-if __name__ == "__main__":
-    main()
+# 必须是模块级调用：alembic 用 exec 加载本文件，__name__ 不是 "__main__"，
+# 套一层 `if __name__ == "__main__"` 会让所有迁移命令静默变成空操作。
+main()

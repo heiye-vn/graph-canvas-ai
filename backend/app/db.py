@@ -55,7 +55,8 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI 依赖：`Depends(get_session)`。"""
-    async with get_session_factory() as session:
+    # 必须再调用一次拿到 AsyncSession 实例：SQLAlchemy 2.1 起 factory 本身不再支持 async with
+    async with get_session_factory()() as session:
         yield session
 
 

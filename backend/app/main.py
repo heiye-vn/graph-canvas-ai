@@ -30,8 +30,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("graph-canvas-ai")
 
-# 容器内由 Dockerfile COPY 到该路径；本地开发不存在则跳过静态托管
-FRONTEND_DIST = Path("/app/frontend/dist")
+from os import getenv
+
+# 容器内由 Dockerfile COPY 到该路径；本地可用 FRONTEND_DIST 指向 frontend/dist 走同源托管
+FRONTEND_DIST = Path(getenv("FRONTEND_DIST", "/app/frontend/dist"))
 
 
 @asynccontextmanager
@@ -75,10 +77,11 @@ def create_app() -> FastAPI:
     # /health 与 /ready 不挂业务前缀；后续 /events（SSE）同样不挂
     app.include_router(health.router)
 
-    # 业务路由统一挂 /api（M1 起逐批接入：auth / assets / sessions / runs / tools）
-    # from app.routers import auth, assets
-    # app.include_router(auth.router, prefix=settings.api_prefix)
-    # app.include_router(assets.router, prefix=settings.api_prefix)
+    # 业务路由统一挂 /api
+    from app.routers import assets, auth
+
+    app.include_router(auth.router, prefix=settings.api_prefix)
+    app.include_router(assets.router, prefix=settings.api_prefix)
 
     _mount_frontend(app)
     return app

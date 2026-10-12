@@ -15,7 +15,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 本地开发兜底：优先 backend/.env，其次仓库根 .env（容器里由 compose 的 env_file 注入）
@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     jwt_secret: str
     jwt_ttl_hours: int = 24
 
+    # ---- 素材上传 ----
+    # backend：文件过一遍本服务（便于服务端做内容校验）；presigned：直传对象存储
+    asset_upload_mode: Literal["backend", "presigned"] = "backend"
+    asset_max_size_mb: int = 20
+
     # ---- 模型 Provider ----
     # mock 使用本地占位图，不产生任何调用费用，也不需要 Key
     image_provider: Literal["mock", "dashscope"] = "mock"
@@ -66,6 +71,18 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @model_validator(mode="after")
+    def _check_secret_strength(self) -> Settings:
+        """HS256 的密钥强度等于其字节长度，短于 32 字节等于自废武功。
+
+        开发/测试环境不拦（避免挡住本地跑通流程），生产环境一律拒绝弱密钥。
+        """
+        if self.is_production and len(self.jwt_secret.encode()) < 32:
+            raise ValueError(
+                f"JWT_SECRET 仅 {len(self.jwt_secret)} 字节，生产环境至少需要 32 字节（建议 64）"
+            )
+        return self
 
     def require_dashscope_key(self) -> str:
         """规划/生图链路真正要用 Key 时才校验，避免 mock 模式下被迫填一堆空变量。"""

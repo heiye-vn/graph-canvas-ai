@@ -368,6 +368,28 @@ wheels = [
 ]
 
 [[package]]
+name = "dnspython"
+version = "2.9.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ef/4a/50822184bd67cc6493f0fb6a880749158fcd31ab3fa07409acfd91f9fc85/dnspython-2.9.0.tar.gz", hash = "sha256:b44dc6b18f07a8b1c56676a19fbfdb5209415b046a9cece286baafa87ff3f7f1", size = 423560, upload-time = "2026-10-09T00:07:24.352Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/10/02/cdcc9b7c051786a103c3b09e1003a82fa0c66bcb91ffbdabcfbf7b4163b9/dnspython-2.9.0-py3-none-any.whl", hash = "sha256:9a4aedb833c3c1b49214d04d44d3032ab7a9135f7c1d29a549b4ff78fd82fda9", size = 354822, upload-time = "2026-10-09T00:07:22.622Z" },
+]
+
+[[package]]
+name = "email-validator"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dnspython" },
+    { name = "idna" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.143.0"
 source = { registry = "https://pypi.org/simple" }
@@ -402,11 +424,13 @@ dependencies = [
     { name = "asyncpg" },
     { name = "bcrypt" },
     { name = "boto3" },
+    { name = "email-validator" },
     { name = "fastapi" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pyjwt" },
+    { name = "python-multipart" },
     { name = "redis" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
@@ -440,6 +464,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "bcrypt", specifier = ">=4.2" },
     { name = "boto3", specifier = ">=1.35" },
+    { name = "email-validator", specifier = ">=2.2" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
     { name = "langchain-core", marker = "extra == 'agent'", specifier = ">=0.3" },
@@ -455,6 +480,7 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.10" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25" },
+    { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "rapidocr-onnxruntime", marker = "extra == 'cv'", specifier = ">=1.4" },
     { name = "redis", specifier = ">=5.2" },
     { name = "rembg", marker = "extra == 'cv'", specifier = ">=2.0" },
@@ -1808,6 +1834,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/74/26/2fbeedb218a787a5eea551c7532cac4e009f83d689dd2faa0d0353473f86/python_dotenv-1.2.4.tar.gz", hash = "sha256:f0d53e69935a851c0dcc78f3ab7aaccd8cabef0b92382b576b824212902873c0", size = 60824, upload-time = "2026-10-01T05:36:10Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/60/d1/38f3a3405989a89ac18390803e70c6ad7c7760da4f9b83cbeca0c44a0c72/python_dotenv-1.2.4-py3-none-any.whl", hash = "sha256:42269a8a5b3fd54ffa6f3d84b18abed50064717576b4ecf03dc4a55d8aa04fdc", size = 23266, upload-time = "2026-10-01T05:36:08.633Z" },
+]
+
+[[package]]
+name = "python-multipart"
+version = "0.0.32"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5b/42/55c32bb9b12693c092ad250a0e82edb5b31ddeda6eb772de5f308b3804ad/python_multipart-0.0.32.tar.gz", hash = "sha256:be54b7f3fa167bb83e4fcd936b887b708f4e57fe75911c02aebf53efaf8d938e", size = 46881, upload-time = "2026-06-04T16:18:58.647Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/04/e8135ebd1ad02c56ec633277529b2602ff99ff634be76cdba5744cf554fd/python_multipart-0.0.32-py3-none-any.whl", hash = "sha256:ff6d3f776f16878c894e52e107296ffc890e913c611b1a4ec6c44e2821fe2e23", size = 30042, upload-time = "2026-06-04T16:18:57.319Z" },
 ]
 
 [[package]]

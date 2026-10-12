@@ -20,6 +20,8 @@ dependencies = [
     "pillow>=11.0",
     "pyjwt>=2.10",
     "bcrypt>=4.2",
+    "email-validator>=2.2",
+    "python-multipart>=0.0.20",
 ]
 
 # 依赖分层（照抄参考项目的克制做法）：
