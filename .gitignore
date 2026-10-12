@@ -8,7 +8,7 @@
 .workbuddy/
 
 # 方案与过程文档，不入库
-docs/
+# docs/
 
 # 用户评测素材
 evals/

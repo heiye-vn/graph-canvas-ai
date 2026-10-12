@@ -1,0 +1,25 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-canvas-900: #0b0d12;
+  --color-canvas-800: #12151d;
+  --color-canvas-700: #1a1e29;
+  --color-canvas-600: #252b3a;
+  --color-canvas-500: #353d52;
+  --color-accent: #6366f1;
+  --color-accent-soft: #818cf8;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-canvas-900);
+  color: #e6e8ee;
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}

@@ -1,0 +1,68 @@
+[project]
+name = "graph-canvas-ai"
+version = "0.1.0"
+description = "自然语言驱动的多模态图像编辑工作台（图画智能体）"
+readme = "README.md"
+requires-python = ">=3.13"
+
+# 核心依赖：任何部署形态都需要
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic>=2.10",
+    "pydantic-settings>=2.7",
+    "redis>=5.2",
+    "arq>=0.26",
+    "boto3>=1.35",
+    "pillow>=11.0",
+    "pyjwt>=2.10",
+    "bcrypt>=4.2",
+]
+
+# 依赖分层（照抄参考项目的克制做法）：
+#   uv sync                 → 只装核心，本地跑流程零成本
+#   uv sync --extra agent   → 加 LLM / LangGraph
+#   uv sync --extra cv      → 加 rembg / onnxruntime / opencv（体积大，M6 才需要）
+#   uv sync --extra dev     → 测试与 lint
+[project.optional-dependencies]
+agent = [
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langgraph>=0.2",
+    "langgraph-checkpoint-postgres>=2.0",
+]
+cv = [
+    "numpy>=2.1",
+    "rembg>=2.0",
+    "onnxruntime>=1.20",
+    "opencv-python-headless>=4.10",
+    "rapidocr-onnxruntime>=1.4",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+    "ruff>=0.9",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
