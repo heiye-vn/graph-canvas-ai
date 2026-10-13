@@ -9,7 +9,8 @@ src/
 │                  刻意先于组件编写——参考项目的 CanvasStage 长到 1087 行就是没抽这层
 ├── layouts/     WorkbenchLayout：左侧导航 + <Outlet />，全站外壳只有这一份
 ├── hooks/       useRunStream（SSE 流 → 组件状态）
-├── components/  通用件：BrandMark / ImageDropzone / RunProgress / ProtectedRoute
+├── lib/         brand / marketing（文案集中）/ antdTheme（组件库主题）
+├── components/  通用件：BrandMark / PageHeader / AssetCard / RunProgress / ProtectedRoute
 │                landing/：落地页专属组件（Hero / PromptComposer / Showcase / Steps / CTA）
 ├── stores/      Zustand：canvasView / editorUi / agentRun / toasts
 └── pages/       Landing（公开）/ Assets / Create / Candidates / Editor
@@ -63,7 +64,34 @@ esbuild 的 postinstall 会 `spawnSync node esbuild --version` 做二进制校�
 若已经装坏了，正确修法是 **整个 `node_modules` 删掉重装**，不要逐个 `--no-save` 补
 （下次 `npm install` 会把它们当成多余包清掉）。
 
+## UI 组件库：antd 6
+
+控件一律走 **antd**（`antd@6` + `@ant-design/icons@6`，无需 React 19 兼容补丁）。
+理由很实际：原生 `<select>` 的下拉面板是操作系统自绘的，和页面主题完全两个世界，
+是界面显得「拼凑」的最大单一来源；手拼 SVG 图标也存在同样问题——线条粗细、
+视觉重量凑不成一套。
+
+三条硬规矩：
+
+1. **主题只有一处真源**：`src/index.css` 的 Tailwind token 与 `src/lib/antdTheme.ts`
+   的 antd token 必须一一对应。改动时两处同步，否则 antd 组件和手写部分一眼两套系统。
+2. **主色只允许一个例外**。`colorPrimary` 的语义是「整页最该点的那一下」，
+   页面上出现第二个主色层级就崩了。确需例外时（登录页深色提交按钮、
+   落地页深色区块上的强调色 CTA）用**局部 `ConfigProvider` 只包住那一个按钮**，
+   主题对象统一放在 `lib/antdTheme.ts` 里导出，不要在组件里现写十六进制。
+3. **不再出现原生 form 控件**：`<select>` / `<input>` / `<textarea>` / `<button>` 一律换成
+   antd 对应件。例外只有薛定谔式的场景性元素（纯装饰 SVG 示意图）。
+
+> ⚠️ **antd 的 CSS-in-JS 是运行时注入的，加载顺序在 Vite 产出的样式表之后**，
+> 同优先级下会盖掉 Tailwind 类。用 Tailwind 覆盖 antd 组件样式时必须加 `!` 后缀
+> （v4 语法：`px-3!`，不是 v3 的 `!px-3`）。已知必须这么写的只有
+> `WorkbenchLayout` 的退出按钮。
+
 ## 约定
 
 - 业务接口走 `/api`，探针与 SSE 走根路径（`/ready`、`/events`），已在 `vite.config.ts` 配好代理。
 - 工具标签与参数表单**全部由后端 `/api/tools` 下发**，前端不硬编码任何工具名清单。
+- 素材卡统一用 `components/AssetCard` —— 创作页历史素材、素材库、候选页此前有三份
+  figure 各自为政，改一次圆角必然漏两处。
+- 构建产物按 `react` / `antd` / 业务代码分三块：antd 体积占了一半以上但几乎不变，
+  单独成块可以让改一行业务逻辑不必让用户重新下载整个组件库。

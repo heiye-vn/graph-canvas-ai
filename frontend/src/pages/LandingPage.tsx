@@ -13,10 +13,11 @@ import LandingFooter from '@/components/landing/LandingFooter'
 import LandingHeader from '@/components/landing/LandingHeader'
 import LandingHero from '@/components/landing/LandingHero'
 import StartBanner from '@/components/landing/StartBanner'
+import { APP_NAME, APP_TAGLINE } from '@/lib/brand'
 
 export default function LandingPage() {
   useEffect(() => {
-    document.title = '出图 AI · 一句话，交付可上架的商品物料'
+    document.title = `${APP_NAME} AI · ${APP_TAGLINE}`
   }, [])
 
   return (

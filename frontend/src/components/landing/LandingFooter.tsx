@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { Button } from 'antd'
 
 import BrandMark from '@/components/BrandMark'
 import { APP_TAGLINE } from '@/lib/brand'
@@ -13,34 +14,30 @@ import { useAuthStore } from '@/stores/authStore'
 export default function LandingFooter() {
   const { user } = useAuthStore()
 
+  const links = user
+    ? [
+        { to: '/create', label: '创作' },
+        { to: '/assets', label: '素材' },
+        { to: '/editor', label: '编辑' },
+      ]
+    : [
+        { to: '/create', label: '创作' },
+        { to: '/login', label: '登录' },
+      ]
+
   return (
     <footer className="border-line bg-paper border-t py-8">
       <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-4 px-8">
         <BrandMark />
         <p className="text-faint text-xs">{APP_TAGLINE}</p>
-        <nav className="flex items-center gap-4 text-xs">
-          {user ? (
-            <>
-              <Link to="/create" className="text-muted hover:text-ink transition">
-                创作
-              </Link>
-              <Link to="/assets" className="text-muted hover:text-ink transition">
-                素材
-              </Link>
-              <Link to="/editor" className="text-muted hover:text-ink transition">
-                编辑
-              </Link>
-            </>
-          ) : (
-            <>
-              <Link to="/create" className="text-muted hover:text-ink transition">
-                创作
-              </Link>
-              <Link to="/login" className="text-muted hover:text-ink transition">
-                登录
-              </Link>
-            </>
-          )}
+        <nav className="flex items-center">
+          {links.map((link) => (
+            <Link key={link.to} to={link.to}>
+              <Button type="link" size="small">
+                {link.label}
+              </Button>
+            </Link>
+          ))}
         </nav>
       </div>
     </footer>

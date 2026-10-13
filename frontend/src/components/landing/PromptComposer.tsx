@@ -8,6 +8,8 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { Button, Input, Tag } from 'antd'
+import { SendOutlined } from '@ant-design/icons'
 
 import { EXAMPLE_PROMPTS } from '@/lib/marketing'
 import { useAuthStore } from '@/stores/authStore'
@@ -29,7 +31,7 @@ export default function PromptComposer() {
 
   return (
     <div className="bg-paper border-line rounded-card border p-4 shadow-card">
-      <textarea
+      <Input.TextArea
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
@@ -37,18 +39,17 @@ export default function PromptComposer() {
         }}
         rows={3}
         placeholder="描述你要的画面，例如：磨砂玻璃精华瓶立在亚克力台上，柔和顶光，白底电商主图"
-        className="border-line bg-soft focus:border-brand text-ink w-full resize-none rounded-control border px-3 py-2.5 text-sm leading-relaxed outline-none transition"
       />
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={submit}
+        <Button
+          type="primary"
+          icon={<SendOutlined />}
           disabled={prompt.trim().length === 0}
-          className="bg-brand hover:bg-brand-strong rounded-control px-4 py-2 text-sm font-medium text-white shadow-control transition disabled:opacity-50"
+          onClick={submit}
         >
           {user ? '去生成' : '登录后生成'}
-        </button>
+        </Button>
         <span className="text-faint text-xs">⌘/Ctrl + Enter 提交</span>
       </div>
 
@@ -56,14 +57,14 @@ export default function PromptComposer() {
         <p className="text-faint mb-2 text-xs">试试这些</p>
         <div className="flex flex-wrap gap-2">
           {EXAMPLE_PROMPTS.map((example) => (
-            <button
+            <Tag
               key={example}
-              type="button"
+              role="button"
+              className="cursor-pointer"
               onClick={() => setPrompt(example)}
-              className="border-line bg-soft hover:border-brand text-muted hover:text-ink rounded-full border px-3 py-1 text-xs transition"
             >
               {example.length > 22 ? `${example.slice(0, 22)}…` : example}
-            </button>
+            </Tag>
           ))}
         </div>
       </div>

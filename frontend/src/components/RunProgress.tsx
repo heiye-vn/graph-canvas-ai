@@ -6,6 +6,8 @@
  *   2. 状态未知时显示「准备中」而不是空白 —— 空白会让用户以为卡死了
  */
 
+import { Progress } from 'antd'
+
 import { STATUS_LABEL } from '@/domain/events'
 import type { RunStatus } from '@/domain/events'
 
@@ -18,19 +20,25 @@ export function RunProgress({
   progress: number
   stage?: string | null
 }) {
+  const percent = Math.min(100, Math.max(0, Math.round(progress)))
+  // antd 的语义化状态：失败变红、成功变绿、进行中有动效
+  const progressStatus =
+    status === 'failed' ? 'exception' : status === 'succeeded' ? 'success' : 'active'
+
   return (
     <div>
       <div className="flex items-center justify-between text-sm">
         <StatusBadge status={status} />
-        <span className="text-faint font-mono text-xs">{Math.round(progress)}%</span>
+        <span className="text-faint font-mono text-xs">{percent}%</span>
       </div>
-      <div className="bg-soft mt-3 h-1.5 w-full overflow-hidden rounded-full">
-        <div
-          className="bg-brand h-full rounded-full transition-[width] duration-300"
-          style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-        />
-      </div>
-      {stage && <p className="text-muted mt-2 text-xs">{stage}</p>}
+      <Progress
+        className="mt-2"
+        percent={percent}
+        status={progressStatus}
+        showInfo={false}
+        size="small"
+      />
+      {stage && <p className="text-muted mt-1.5 text-xs">{stage}</p>}
     </div>
   )
 }

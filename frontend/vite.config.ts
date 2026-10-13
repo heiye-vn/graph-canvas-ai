@@ -27,5 +27,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // antd 体积占了一半以上、变更频率远低于业务代码 —— 单独成块，
+        // 改一行页面逻辑不该让用户把整个组件库重新下一遍。
+        manualChunks: {
+          antd: ['antd', '@ant-design/icons'],
+          react: ['react', 'react-dom', 'react-router-dom'],
+        },
+      },
+    },
   },
 })

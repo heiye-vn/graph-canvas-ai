@@ -8,24 +8,20 @@
  * 编辑区横向空间寸土寸金，常态不该被导航占掉。
  */
 
+import { AppstoreOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
+import { Avatar, Button } from 'antd'
+import type { ReactNode } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 
 import BrandMark from '@/components/BrandMark'
 import { useAuthStore } from '@/stores/authStore'
 
-const NAV_ITEMS = [
-  { to: '/create', label: '创作', icon: 'M12 4v16m8-8H4' },
-  { to: '/assets', label: '素材', icon: 'M4 6h16M4 12h16M4 18h10' },
-  { to: '/editor', label: '编辑', icon: 'M4 20h4L20 8l-4-4L4 16v4z' },
+// 图标统一走 @ant-design/icons，不再手拼 SVG path —— 线条粗细和视觉重量才是一套的
+const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
+  { to: '/create', label: '创作', icon: <PlusOutlined /> },
+  { to: '/assets', label: '素材', icon: <AppstoreOutlined /> },
+  { to: '/editor', label: '编辑', icon: <EditOutlined /> },
 ]
-
-function NavIcon({ path }: { path: string }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" className="size-5 shrink-0" aria-hidden>
-      <path d={path} stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  )
-}
 
 export default function WorkbenchLayout() {
   const navigate = useNavigate()
@@ -53,7 +49,7 @@ export default function WorkbenchLayout() {
                     }`
                   }
                 >
-                  <NavIcon path={item.icon} />
+                  <span className="flex w-5 shrink-0 justify-center text-[17px]">{item.icon}</span>
                   <span className="truncate opacity-0 transition-opacity group-hover:opacity-100">
                     {item.label}
                   </span>
@@ -63,22 +59,30 @@ export default function WorkbenchLayout() {
           </ul>
 
           <div className="border-line mt-2 border-t px-2 pt-3">
-            <button
-              type="button"
+            {/*
+              这里的 Tailwind 类必须带 `!`：antd 的 CSS-in-JS 是运行时注入的，
+              加载顺序在 Vite 产出的样式表之后，同优先级下会盖掉 Tailwind。
+              收窄到最后这一处图标 Aligned 的间距上，不值得为它单独开一套 button token。
+            */}
+            <Button
+              type="text"
+              title={user ? `${user.email} · 退出登录` : '退出登录'}
               onClick={() => {
                 signOut()
                 navigate('/login', { replace: true })
               }}
-              title={user ? `${user.email} · 退出登录` : '退出登录'}
-              className="text-muted hover:bg-soft hover:text-ink flex w-full items-center gap-3 rounded-control px-3 py-2.5 text-sm transition-colors"
+              className="h-auto! w-full! gap-3! px-3! py-2.5! flex! items-center! justify-start!"
             >
-              <span className="bg-brand-soft text-brand-strong grid size-5 shrink-0 place-items-center rounded-full text-[11px] font-semibold">
+              <Avatar
+                size={20}
+                className="bg-brand-soft! text-brand-strong! shrink-0 text-[11px] font-semibold"
+              >
                 {(user?.email ?? '?').slice(0, 1).toUpperCase()}
-              </span>
-              <span className="truncate opacity-0 transition-opacity group-hover:opacity-100">
+              </Avatar>
+              <span className="truncate text-sm opacity-0 transition-opacity group-hover:opacity-100">
                 退出登录
               </span>
-            </button>
+            </Button>
           </div>
         </div>
       </nav>

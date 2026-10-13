@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { Button } from 'antd'
 
 import BrandMark from '@/components/BrandMark'
 import { APP_TAGLINE } from '@/lib/brand'
@@ -18,25 +19,16 @@ export default function LandingHeader() {
         <nav className="flex items-center gap-2">
           <span className="text-faint mr-2 hidden text-xs sm:inline">{APP_TAGLINE}</span>
           {user ? (
-            <Link
-              to="/create"
-              className="bg-brand hover:bg-brand-strong rounded-control px-3 py-1.5 text-xs font-medium text-white shadow-control transition"
-            >
-              进入工作台
+            <Link to="/create">
+              <Button type="primary">进入工作台</Button>
             </Link>
           ) : (
             <>
-              <Link
-                to="/login"
-                className="text-muted hover:text-ink rounded-control px-3 py-1.5 text-xs transition"
-              >
-                登录
+              <Link to="/login">
+                <Button type="text">登录</Button>
               </Link>
-              <Link
-                to="/login"
-                className="bg-brand hover:bg-brand-strong rounded-control px-3 py-1.5 text-xs font-medium text-white shadow-control transition"
-              >
-                免费开始
+              <Link to="/login">
+                <Button type="primary">免费开始</Button>
               </Link>
             </>
           )}

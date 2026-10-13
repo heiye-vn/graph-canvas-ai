@@ -1,6 +1,9 @@
 import { Link } from 'react-router-dom'
+import { Button, ConfigProvider } from 'antd'
+import { ArrowRightOutlined } from '@ant-design/icons'
 
 import { APP_TAGLINE } from '@/lib/brand'
+import { accentTheme } from '@/lib/antdTheme'
 import { useAuthStore } from '@/stores/authStore'
 
 export default function StartBanner() {
@@ -17,12 +20,15 @@ export default function StartBanner() {
             <p className="mt-1.5 text-sm text-white/70">{APP_TAGLINE}</p>
           </div>
 
-          <Link
-            to={user ? '/create' : '/login'}
-            className="bg-accent text-dark rounded-control px-5 py-2.5 text-sm font-medium shadow-control transition hover:opacity-90"
-          >
-            {user ? '打开工作台' : '免费开始'}
-          </Link>
+          {/* 深色区块上的 CTA 用强调色：它压在整个页面的视觉重心上，主色降不住 */}
+          <ConfigProvider theme={accentTheme}>
+            <Link to={user ? '/create' : '/login'}>
+              <Button type="primary">
+                {user ? '打开工作台' : '免费开始'}
+                <ArrowRightOutlined />
+              </Button>
+            </Link>
+          </ConfigProvider>
         </div>
       </div>
     </section>

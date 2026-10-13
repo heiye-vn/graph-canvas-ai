@@ -7,17 +7,23 @@
  * 提交后**立刻跳到 /candidates/{runId}**，进度不留在这一屏：
  * 候选页是可刷新、可分享的独立 URL，把链路留在上一页等于把「刷新一下全丢」
  * 的风险甩给用户。
+ *
+ * 控件统一走 antd：原生 select 的下拉面板是系统自绘的，和主题完全两个世界；
+ * 这正是当初界面显得「拼凑」的最大单一来源。
  */
 
 import { useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, Button, Input, Select, Spin, Upload } from 'antd'
+import { InboxOutlined } from '@ant-design/icons'
+import type { UploadProps } from 'antd'
 
 import { deleteAsset, listAssets } from '@/api/assets'
-import type { AssetOut } from '@/api/assets'
 import { SIZE_PRESETS, createTextToImage } from '@/api/runs'
 import type { RunOut } from '@/api/runs'
-import ImageDropzone from '@/components/ImageDropzone'
+import AssetCard from '@/components/AssetCard'
+import PageHeader from '@/components/PageHeader'
 import { uploadAsset } from '@/domain/upload'
 
 const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp']
@@ -61,73 +67,68 @@ export default function CreatePage() {
     onSuccess: invalidateAssets,
   })
 
-  function onFile(file: File) {
-    if (!ACCEPTED.includes(file.type)) {
-      setError('只支持 PNG / JPEG / WebP')
-      return
-    }
-    upload.mutate(file)
+  const draggerProps: UploadProps = {
+    accept: ACCEPTED.join(','),
+    multiple: false,
+    showUploadList: false,
+    disabled: upload.isPending,
+    // 返回 false = 不走 antd 的自动上传，文件交给我们自己的两段式上传域逻辑
+    beforeUpload(file) {
+      if (!ACCEPTED.includes(file.type)) {
+        setError('只支持 PNG / JPEG / WebP')
+        return Upload.LIST_IGNORE
+      }
+      upload.mutate(file)
+      return false
+    },
   }
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-10">
-      <header className="mb-8">
-        <h1 className="text-ink text-2xl font-medium tracking-tight">创作</h1>
-        <p className="text-muted mt-1 text-sm">描述画面生成，或上传一张已有的图继续加工。</p>
-      </header>
+      <PageHeader title="创作" description="描述画面生成，或上传一张已有的图继续加工。" />
 
       <section className="border-line bg-paper shadow-card rounded-card border p-5">
         <label htmlFor="prompt" className="text-muted block text-xs">
           描述你想要的画面
         </label>
-        <textarea
+        <Input.TextArea
           id="prompt"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
           placeholder="例如：白色背景上的透明玻璃精华瓶，柔和顶光，电商主图质感"
-          className="border-line bg-soft focus:border-brand text-ink mt-2 w-full resize-none rounded-control border px-3 py-2 text-sm outline-none transition"
+          className="mt-2!"
         />
 
         <div className="mt-4 flex flex-wrap items-end gap-4">
           <div>
-            <span className="text-muted block text-xs">尺寸</span>
-            <select
+            <span className="text-muted mb-1.5 block text-xs">尺寸</span>
+            <Select
               value={size}
-              onChange={(e) => setSize(e.target.value)}
-              className="border-line bg-soft focus:border-brand text-ink mt-1 rounded-control border px-3 py-2 text-sm outline-none transition"
-            >
-              {SIZE_PRESETS.map((preset) => (
-                <option key={preset.value} value={preset.value}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
+              onChange={setSize}
+              options={SIZE_PRESETS.map((preset) => ({ value: preset.value, label: preset.label }))}
+              className="w-36"
+            />
           </div>
 
           <div>
-            <span className="text-muted block text-xs">张数</span>
-            <select
+            <span className="text-muted mb-1.5 block text-xs">张数</span>
+            <Select
               value={count}
-              onChange={(e) => setCount(Number(e.target.value))}
-              className="border-line bg-soft focus:border-brand text-ink mt-1 rounded-control border px-3 py-2 text-sm outline-none transition"
-            >
-              {[1, 2, 3, 4].map((n) => (
-                <option key={n} value={n}>
-                  {n} 张
-                </option>
-              ))}
-            </select>
+              onChange={setCount}
+              options={[1, 2, 3, 4].map((n) => ({ value: n, label: `${n} 张` }))}
+              className="w-28"
+            />
           </div>
 
-          <button
-            type="button"
-            disabled={generate.isPending || prompt.trim().length === 0}
+          <Button
+            type="primary"
+            loading={generate.isPending}
+            disabled={prompt.trim().length === 0}
             onClick={() => generate.mutate()}
-            className="bg-brand hover:bg-brand-strong rounded-control px-5 py-2 text-sm font-medium text-white shadow-control transition disabled:opacity-50"
           >
-            {generate.isPending ? '提交中…' : '生成'}
-          </button>
+            生成
+          </Button>
         </div>
 
         <p className="text-faint mt-3 text-xs">
@@ -136,49 +137,51 @@ export default function CreatePage() {
       </section>
 
       {error && (
-        <p className="bg-danger/10 text-danger mt-4 rounded-control px-4 py-3 text-sm">{error}</p>
+        <Alert
+          className="mt-4"
+          type="error"
+          showIcon
+          message={error}
+          closable
+          onClose={() => setError(null)}
+        />
       )}
 
       <section className="mt-10">
         <h2 className="text-muted mb-3 text-sm font-medium">上传已有图片</h2>
-        <ImageDropzone onFile={onFile} disabled={upload.isPending} />
+        <Upload.Dragger {...draggerProps} className="bg-soft!">
+          <p className="text-brand text-3xl">
+            <InboxOutlined />
+          </p>
+          <p className="text-ink text-sm">点击或把图片拖到这里</p>
+          <p className="text-faint mt-1 text-xs">PNG / JPEG / WebP，单张不超过 20MB</p>
+        </Upload.Dragger>
       </section>
 
       <section className="mt-10">
         <div className="mb-3 flex items-baseline justify-between">
           <h2 className="text-muted text-sm font-medium">历史素材</h2>
-          <Link to="/assets" className="text-brand hover:text-brand-strong text-xs transition">
-            管理全部素材
+          <Link to="/assets">
+            <Button type="link" size="small">
+              管理全部素材
+            </Button>
           </Link>
         </div>
 
-        {assets.isLoading && <p className="text-muted text-sm">加载中…</p>}
-        {assets.data && assets.data.items.length === 0 && (
+        {assets.isLoading ? (
+          <div className="flex justify-center py-10">
+            <Spin />
+          </div>
+        ) : assets.data && assets.data.items.length === 0 ? (
           <p className="text-faint text-sm">还没有素材，先生成一张或上传一张。</p>
+        ) : (
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {assets.data?.items.slice(0, 8).map((asset) => (
+              <AssetCard key={asset.id} asset={asset} onDelete={() => remove.mutate(asset.id)} />
+            ))}
+          </div>
         )}
-
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-          {assets.data?.items.slice(0, 8).map((asset) => (
-            <AssetCard key={asset.id} asset={asset} onDelete={() => remove.mutate(asset.id)} />
-          ))}
-        </div>
       </section>
     </div>
-  )
-}
-
-function AssetCard({ asset, onDelete }: { asset: AssetOut; onDelete: () => void }) {
-  return (
-    <figure className="border-line bg-paper shadow-card overflow-hidden rounded-card border">
-      <img src={asset.url} alt="" className="h-32 w-full object-cover" loading="lazy" />
-      <figcaption className="text-muted flex items-center justify-between px-3 py-2 text-xs">
-        <span className="font-mono">
-          {asset.width}×{asset.height}
-        </span>
-        <button type="button" onClick={onDelete} className="text-danger transition hover:opacity-70">
-          删除
-        </button>
-      </figcaption>
-    </figure>
   )
 }

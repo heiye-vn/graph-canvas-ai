@@ -13,11 +13,13 @@
 import { useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Alert, Button, Empty, Result, Space, Spin } from 'antd'
 
 import { getRun, listRunAssets } from '@/api/runs'
 import type { RunOut } from '@/api/runs'
+import AssetCard from '@/components/AssetCard'
+import PageHeader from '@/components/PageHeader'
 import { RunProgress } from '@/components/RunProgress'
-import { useAuthStore } from '@/stores/authStore'
 import { useRunStream } from '@/hooks/useRunStream'
 import { isTerminalStatus } from '@/domain/events'
 import type { RunStatus } from '@/domain/events'
@@ -25,7 +27,6 @@ import type { RunStatus } from '@/domain/events'
 export default function CandidatesPage() {
   const { runId = '' } = useParams()
   const queryClient = useQueryClient()
-  const { user } = useAuthStore()
 
   const run = useQuery({
     queryKey: ['run', runId],
@@ -55,17 +56,25 @@ export default function CandidatesPage() {
   }, [stream.closed, queryClient, runId])
 
   if (run.isLoading) {
-    return <p className="text-muted px-8 py-10 text-sm">加载中…</p>
+    return (
+      <div className="flex justify-center py-28">
+        <Spin size="large" />
+      </div>
+    )
   }
 
   if (run.isError) {
     return (
-      <div className="mx-auto max-w-3xl px-8 py-16 text-center">
-        <p className="text-ink text-sm">这个任务不存在，或者它不属于当前账号。</p>
-        <Link to="/create" className="text-brand hover:text-brand-strong mt-3 inline-block text-xs">
-          回到创作页
-        </Link>
-      </div>
+      <Result
+        status="404"
+        title="找不到这个任务"
+        subTitle="它可能已被清理，或者不属于当前账号。"
+        extra={
+          <Link to="/create">
+            <Button type="primary">回到创作页</Button>
+          </Link>
+        }
+      />
     )
   }
 
@@ -79,11 +88,22 @@ export default function CandidatesPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-10">
-      <header className="mb-6">
-        <p className="text-faint text-xs">{user?.email}</p>
-        <h1 className="text-ink mt-1 text-2xl font-medium tracking-tight">候选图</h1>
-        {prompt && <p className="text-muted mt-2 text-sm">{prompt}</p>}
-      </header>
+      <PageHeader
+        title="候选图"
+        description={prompt || undefined}
+        extra={
+          isTerminalStatus(data.status) ? (
+            <Space>
+              <Link to="/create">
+                <Button>再生成一组</Button>
+              </Link>
+              <Link to="/assets">
+                <Button type="link">去素材库</Button>
+              </Link>
+            </Space>
+          ) : null
+        }
+      />
 
       {(!isTerminalStatus(data.status) || stream.status) && (
         <section className="border-line bg-paper shadow-card rounded-card border p-5">
@@ -96,74 +116,40 @@ export default function CandidatesPage() {
       )}
 
       {stream.error && (
-        <p className="bg-danger/10 text-danger mt-4 rounded-control px-4 py-3 text-sm">
-          {stream.error}
-        </p>
+        <Alert className="mt-4" type="error" showIcon message={stream.error} closable />
       )}
       {data.error?.message && (
-        <p className="bg-danger/10 text-danger mt-4 rounded-control px-4 py-3 text-sm">
-          {data.error.message}
-        </p>
+        <Alert className="mt-4" type="error" showIcon message={data.error.message} />
       )}
 
       <section className="mt-8">
         {total === 0 ? (
-          <p className="text-muted text-sm">
-            {isTerminalStatus(data.status) ? '这次没有产出可用的图。' : '正在生成，稍等片刻…'}
-          </p>
+          <Empty
+            description={
+              isTerminalStatus(data.status) ? '这次没有产出可用的图。' : '正在生成，稍等片刻…'
+            }
+          />
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             {finished.map((asset) => (
-              <figure
-                key={asset.id}
-                className="border-line bg-paper shadow-card overflow-hidden rounded-card border"
-              >
-                <img src={asset.url} alt="" className="h-44 w-full object-cover" loading="lazy" />
-                <figcaption className="text-muted flex items-center justify-between px-3 py-2 text-xs">
-                  <span className="font-mono">
-                    {asset.width}×{asset.height}
-                  </span>
-                  <a
-                    href={asset.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-brand hover:text-brand-strong transition"
-                  >
-                    查看原图
-                  </a>
-                </figcaption>
-              </figure>
+              <AssetCard key={asset.id} asset={asset} />
             ))}
 
             {live.map((candidate) => (
-              <figure
+              <AssetCard
                 key={candidate.assetId}
-                className="border-line bg-paper shadow-card overflow-hidden rounded-card border"
-              >
-                <img
-                  src={candidate.url}
-                  alt=""
-                  className="h-44 w-full object-cover"
-                  loading="lazy"
-                />
-                <figcaption className="text-faint px-3 py-2 text-xs">刚刚生成</figcaption>
-              </figure>
+                pending
+                asset={{
+                  id: candidate.assetId,
+                  url: candidate.url,
+                  width: null,
+                  height: null,
+                }}
+              />
             ))}
           </div>
         )}
       </section>
-
-      <footer className="mt-10 flex items-center gap-4">
-        <Link
-          to="/create"
-          className="border-line bg-paper hover:border-brand rounded-control border px-3 py-1.5 text-xs text-ink shadow-control transition"
-        >
-          再生成一组
-        </Link>
-        <Link to="/assets" className="text-muted hover:text-ink text-xs transition">
-          去素材库
-        </Link>
-      </footer>
     </div>
   )
 }

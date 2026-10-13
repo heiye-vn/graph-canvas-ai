@@ -1,3 +1,5 @@
+import { Card, Tag } from 'antd'
+
 import CapabilityPreview from './Previews'
 import { CAPABILITIES } from '@/lib/marketing'
 
@@ -9,37 +11,35 @@ export default function CapabilityShowcase() {
 
       <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {CAPABILITIES.map((capability) => (
-          <article
+          <Card
             key={capability.id}
-            className="bg-paper border-line rounded-card border shadow-card overflow-hidden"
-          >
-            <div className="border-line bg-soft border-b p-3">
-              <div className="aspect-[16/11]">
+            size="small"
+            hoverable={capability.ready}
+            variant="outlined"
+            classNames={{ body: 'pt-3!' }}
+            cover={
+              <div className="bg-soft aspect-[16/11] p-3">
                 <CapabilityPreview kind={capability.preview} />
               </div>
+            }
+          >
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <Tag bordered={false} color="processing" className="m-0">
+                {capability.label}
+              </Tag>
+              {!capability.ready && (
+                <Tag bordered={false} className="m-0">
+                  即将上线
+                </Tag>
+              )}
             </div>
-
-            <div className="p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <span className="bg-brand-soft text-brand-strong rounded-full px-2 py-0.5 text-[11px]">
-                  {capability.label}
-                </span>
-                {!capability.ready && (
-                  <span className="text-faint rounded-full border border-line px-2 py-0.5 text-[11px]">
-                    即将上线
-                  </span>
-                )}
-              </div>
-              <h3 className="text-ink text-sm font-medium">{capability.title}</h3>
-              <p className="text-muted mt-1.5 text-xs leading-relaxed">{capability.hint}</p>
-            </div>
-          </article>
+            <h3 className="text-ink text-sm font-medium">{capability.title}</h3>
+            <p className="text-muted mt-1.5 text-xs leading-relaxed">{capability.hint}</p>
+          </Card>
         ))}
       </div>
 
-      <p className="text-faint mt-5 text-xs">
-        示意图为界面结构演示，不代表真实模型产出。
-      </p>
+      <p className="text-faint mt-5 text-xs">示意图为界面结构演示，不代表真实模型产出。</p>
     </section>
   )
 }
