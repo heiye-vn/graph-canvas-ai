@@ -10,21 +10,31 @@ src/
 ├── layouts/     WorkbenchLayout：左侧导航 + <Outlet />，全站外壳只有这一份
 ├── hooks/       useRunStream（SSE 流 → 组件状态）
 ├── components/  通用件：BrandMark / ImageDropzone / RunProgress / ProtectedRoute
+│                landing/：落地页专属组件（Hero / PromptComposer / Showcase / Steps / CTA）
 ├── stores/      Zustand：canvasView / editorUi / agentRun / toasts
-└── pages/       Create（创作）/ Candidates（候选）/ Home（素材库）/ Editor（编制中）
+└── pages/       Landing（公开）/ Assets / Create / Candidates / Editor
 ```
 
 ## 路由
 
 | 路径 | 页面 | 说明 |
 |---|---|---|
-| `/login` | LoginPage | 未登录时的唯一入口 |
+| `/` | LandingPage | **公开**落地页，不套 WorkbenchLayout，不要求登录 |
+| `/login` | LoginPage | 支持 `state:{next,prompt}` 接力，登录后直达目标页 |
 | `/create` | CreatePage | 创作起点：生成 + 上传 + 历史素材一屏 |
 | `/candidates/:runId` | CandidatesPage | 候选图，**可刷新、可分享** |
-| `/` | HomePage | 素材库（全量列表 + 删除） |
+| `/assets` | AssetsPage | 素材库（全量列表 + 删除） |
 | `/editor` | EditorPage | M3 接入 Konva 画布 |
 
-`/login` 之外全部包在 `ProtectedRoute` → `WorkbenchLayout` 两层布局路由里，页面只写内容区。
+`/login` 之外的工作台页面全部包在 `ProtectedRoute` → `WorkbenchLayout` 两层布局路由里，
+页面只写内容区。
+
+> 落地页输入框支持把 prompt 一路带到创作页：
+> 未登录时先跳 `/login` 并带上 `{next:'/create', prompt}`，登录成功后 LoginPage
+> 再把 prompt 接力给 CreatePage。**别让用户在两个页面上重复输入同一句话。**
+>
+> 落地页的能力卡片带 `ready` 标记，未上线的能力会打「即将上线」——
+> 落地页不该宣称还没做出来的功能。
 
 > **候选页为什么必须独立成路由**：run id 在 URL 上才谈得上刷新恢复与分享。
 > 内嵌方案里 run id 只活在内存，刷新一下这次生成的图就全丢了。

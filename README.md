@@ -42,9 +42,14 @@ npm run dev                              # http://localhost:7301
 
 ```
 backend/    FastAPI：config（必填 fail-fast）/ db / routers / services / tools / agent / providers / eval
-frontend/   React 19：api / domain（画布领域层）/ stores / components / pages
+frontend/   React 19：api / domain（画布领域层）/ layouts / hooks / components / pages
 docs/       开发计划与参考项目分析报告（阶段性文档，开发完成后从仓库移除）
 ```
+
+## 已具备的形态
+
+`/` 公开落地页 → `/login`（可携带 prompt 接力）→ `/create` 创作（生成 + 上传 + 素材一屏）
+→ `/candidates/{runId}` 候选图（可刷新可分享）→ `/assets` 素材库。工作台统一套左侧导航。
 
 ## 开发进度
 

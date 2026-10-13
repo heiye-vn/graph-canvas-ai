@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { deleteAsset, listAssets } from '@/api/assets'
@@ -24,9 +24,12 @@ const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp']
 
 export default function CreatePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
 
-  const [prompt, setPrompt] = useState('')
+  // 落地页 →（可能经过登录页）→ 这里，prompt 一路带过来
+  const carriedPrompt = (location.state as { prompt?: string } | null)?.prompt ?? ''
+  const [prompt, setPrompt] = useState(carriedPrompt)
   const [size, setSize] = useState<string>(SIZE_PRESETS[0].value)
   const [count, setCount] = useState(1)
   const [error, setError] = useState<string | null>(null)
@@ -144,7 +147,7 @@ export default function CreatePage() {
       <section className="mt-10">
         <div className="mb-3 flex items-baseline justify-between">
           <h2 className="text-muted text-sm font-medium">历史素材</h2>
-          <Link to="/" className="text-brand hover:text-brand-strong text-xs transition">
+          <Link to="/assets" className="text-brand hover:text-brand-strong text-xs transition">
             管理全部素材
           </Link>
         </div>

@@ -1,12 +1,21 @@
 import { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { APP_BADGE, APP_NAME, APP_TAGLINE } from '@/lib/brand'
 import { useAuthStore } from '@/stores/authStore'
 
+interface LoginLocationState {
+  /** 从落地页输入完 prompt 被拦到登录页时，记下要去哪、带什么 */
+  next?: string
+  prompt?: string
+}
+
 export default function LoginPage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { signIn, signUp } = useAuthStore()
+  const next = (location.state as LoginLocationState | null)?.next ?? '/create'
+  const carriedPrompt = (location.state as LoginLocationState | null)?.prompt
 
   const [mode, setMode] = useState<'login' | 'register'>('login')
   const [email, setEmail] = useState('')
@@ -21,7 +30,8 @@ export default function LoginPage() {
     try {
       if (mode === 'login') await signIn(email, password)
       else await signUp(email, password)
-      navigate('/', { replace: true })
+      // 把落地页写好的 prompt 接力送到创作页，不让用户重新输一遍
+      navigate(next, { replace: true, state: carriedPrompt ? { prompt: carriedPrompt } : undefined })
     } catch (err) {
       setError(err instanceof Error ? err.message : '操作失败')
     } finally {

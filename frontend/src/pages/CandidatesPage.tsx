@@ -160,7 +160,7 @@ export default function CandidatesPage() {
         >
           再生成一组
         </Link>
-        <Link to="/" className="text-muted hover:text-ink text-xs transition">
+        <Link to="/assets" className="text-muted hover:text-ink text-xs transition">
           去素材库
         </Link>
       </footer>

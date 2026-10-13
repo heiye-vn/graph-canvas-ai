@@ -12,7 +12,7 @@ import { deleteAsset, listAssets } from '@/api/assets'
 import type { AssetOut } from '@/api/assets'
 import { APP_TAGLINE } from '@/lib/brand'
 
-export default function HomePage() {
+export default function AssetsPage() {
   const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({ queryKey: ['assets'], queryFn: listAssets })
