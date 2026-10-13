@@ -1,87 +1,80 @@
 /**
- * 生图工作台（M2 端到端闭环）。
+ * 创作页：一次创作的起点。
  *
- * 交互顺序刻意固定为「先拿 run id → 再订阅 → 最后才渲染进度」：
- * 反过来的话，任务可能在订阅建立前就结束，前端永远等不到任何事件。
+ * 刻意把「生成」「上传」「历史素材」放在同一屏 —— 这三件事是同一次创作的三种入口，
+ * 拆成多个页面会让用户在还没开始之前就先迷路。
+ *
+ * 提交后**立刻跳到 /candidates/{runId}**，进度不留在这一屏：
+ * 候选页是可刷新、可分享的独立 URL，把链路留在上一页等于把「刷新一下全丢」
+ * 的风险甩给用户。
  */
 
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { useMutation } from '@tanstack/react-query'
+import { Link, useNavigate } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { SIZE_PRESETS, cancelRun, createTextToImage } from '@/api/runs'
+import { deleteAsset, listAssets } from '@/api/assets'
+import type { AssetOut } from '@/api/assets'
+import { SIZE_PRESETS, createTextToImage } from '@/api/runs'
 import type { RunOut } from '@/api/runs'
-import { useRunStream } from '@/hooks/useRunStream'
-import { STATUS_LABEL } from '@/domain/events'
-import type { RunStatus } from '@/domain/events'
-import { APP_BADGE, APP_NAME } from '@/lib/brand'
-import { useAuthStore } from '@/stores/authStore'
+import ImageDropzone from '@/components/ImageDropzone'
+import { uploadAsset } from '@/domain/upload'
+
+const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp']
 
 export default function CreatePage() {
-  const { user, signOut } = useAuthStore()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+
   const [prompt, setPrompt] = useState('')
   const [size, setSize] = useState<string>(SIZE_PRESETS[0].value)
   const [count, setCount] = useState(1)
-  const [runId, setRunId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const stream = useRunStream(runId)
+  const assets = useQuery({ queryKey: ['assets'], queryFn: listAssets })
+  const invalidateAssets = () => queryClient.invalidateQueries({ queryKey: ['assets'] })
 
-  const submit = useMutation({
+  const generate = useMutation({
     mutationFn: () => createTextToImage({ prompt, size, n: count }),
     onSuccess: (run: RunOut) => {
       setError(null)
-      setRunId(run.id) // 先落 run id，hook 随即建立 SSE 订阅
+      setPrompt('')
+      navigate(`/candidates/${run.id}`)
     },
     onError: (err: Error) => setError(err.message),
   })
 
-  const cancel = useMutation({
-    mutationFn: () => cancelRun(runId as string),
+  const upload = useMutation({
+    mutationFn: (file: File) => uploadAsset(file),
+    onSuccess: () => {
+      setError(null)
+      invalidateAssets()
+    },
     onError: (err: Error) => setError(err.message),
   })
 
-  const busy =
-    submit.isPending ||
-    (stream.status !== null && stream.status !== 'succeeded' && !stream.closed) ||
-    (stream.status === null && runId !== null && !stream.closed)
+  const remove = useMutation({
+    mutationFn: (id: string) => deleteAsset(id),
+    onSuccess: invalidateAssets,
+  })
 
-  const shownStatus: RunStatus | null = stream.status
-  const canSubmit = prompt.trim().length > 0 && !busy
+  function onFile(file: File) {
+    if (!ACCEPTED.includes(file.type)) {
+      setError('只支持 PNG / JPEG / WebP')
+      return
+    }
+    upload.mutate(file)
+  }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <header className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-medium text-ink">
-            生成图片
-            <span className="rounded-full bg-accent px-2 py-0.5 text-[10px] font-semibold tracking-wide text-dark">
-              {APP_BADGE}
-            </span>
-          </h1>
-          <p className="mt-1 text-xs text-faint">
-            {APP_NAME} · {user?.email}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            to="/"
-            className="rounded-control border border-line bg-paper px-3 py-1.5 text-xs text-ink shadow-control transition hover:border-brand"
-          >
-            素材库
-          </Link>
-          <button
-            type="button"
-            onClick={signOut}
-            className="rounded-control px-3 py-1.5 text-xs text-muted transition hover:text-ink"
-          >
-            退出
-          </button>
-        </div>
+    <div className="mx-auto max-w-4xl px-8 py-10">
+      <header className="mb-8">
+        <h1 className="text-ink text-2xl font-medium tracking-tight">创作</h1>
+        <p className="text-muted mt-1 text-sm">描述画面生成，或上传一张已有的图继续加工。</p>
       </header>
 
-      <section className="rounded-card border border-line bg-paper p-5 shadow-card">
-        <label htmlFor="prompt" className="block text-xs text-muted">
+      <section className="border-line bg-paper shadow-card rounded-card border p-5">
+        <label htmlFor="prompt" className="text-muted block text-xs">
           描述你想要的画面
         </label>
         <textarea
@@ -90,16 +83,16 @@ export default function CreatePage() {
           onChange={(e) => setPrompt(e.target.value)}
           rows={3}
           placeholder="例如：白色背景上的透明玻璃精华瓶，柔和顶光，电商主图质感"
-          className="mt-2 w-full resize-none rounded-control border border-line bg-soft px-3 py-2 text-sm text-ink outline-none transition focus:border-brand"
+          className="border-line bg-soft focus:border-brand text-ink mt-2 w-full resize-none rounded-control border px-3 py-2 text-sm outline-none transition"
         />
 
         <div className="mt-4 flex flex-wrap items-end gap-4">
           <div>
-            <span className="block text-xs text-muted">尺寸</span>
+            <span className="text-muted block text-xs">尺寸</span>
             <select
               value={size}
               onChange={(e) => setSize(e.target.value)}
-              className="mt-1 rounded-control border border-line bg-soft px-3 py-2 text-sm text-ink outline-none transition focus:border-brand"
+              className="border-line bg-soft focus:border-brand text-ink mt-1 rounded-control border px-3 py-2 text-sm outline-none transition"
             >
               {SIZE_PRESETS.map((preset) => (
                 <option key={preset.value} value={preset.value}>
@@ -110,11 +103,11 @@ export default function CreatePage() {
           </div>
 
           <div>
-            <span className="block text-xs text-muted">张数</span>
+            <span className="text-muted block text-xs">张数</span>
             <select
               value={count}
               onChange={(e) => setCount(Number(e.target.value))}
-              className="mt-1 rounded-control border border-line bg-soft px-3 py-2 text-sm text-ink outline-none transition focus:border-brand"
+              className="border-line bg-soft focus:border-brand text-ink mt-1 rounded-control border px-3 py-2 text-sm outline-none transition"
             >
               {[1, 2, 3, 4].map((n) => (
                 <option key={n} value={n}>
@@ -126,97 +119,63 @@ export default function CreatePage() {
 
           <button
             type="button"
-            disabled={!canSubmit}
-            onClick={() => submit.mutate()}
-            className="rounded-control bg-brand px-5 py-2 text-sm font-medium text-white shadow-control transition hover:bg-brand-strong disabled:opacity-50"
+            disabled={generate.isPending || prompt.trim().length === 0}
+            onClick={() => generate.mutate()}
+            className="bg-brand hover:bg-brand-strong rounded-control px-5 py-2 text-sm font-medium text-white shadow-control transition disabled:opacity-50"
           >
-            {submit.isPending ? '提交中…' : '生成'}
+            {generate.isPending ? '提交中…' : '生成'}
           </button>
-
-          {runId && !stream.closed && (
-            <button
-              type="button"
-              disabled={cancel.isPending}
-              onClick={() => cancel.mutate()}
-              className="rounded-control border border-line px-3 py-2 text-xs text-muted transition hover:border-danger hover:text-danger disabled:opacity-50"
-            >
-              取消
-            </button>
-          )}
         </div>
 
-        <p className="mt-3 text-xs text-faint">
+        <p className="text-faint mt-3 text-xs">
           当前接入本地占位模型，出图会带 MOCK 标记 —— 用于验证链路，不是真实模型效果。
         </p>
       </section>
 
       {error && (
-        <p className="mt-4 rounded-control bg-danger/10 px-4 py-3 text-sm text-danger">{error}</p>
-      )}
-      {stream.error && !error && (
-        <p className="mt-4 rounded-control bg-danger/10 px-4 py-3 text-sm text-danger">
-          {stream.error}
-        </p>
+        <p className="bg-danger/10 text-danger mt-4 rounded-control px-4 py-3 text-sm">{error}</p>
       )}
 
-      {runId && <ProgressPanel status={shownStatus} progress={stream.progress} stage={stream.stage} />}
+      <section className="mt-10">
+        <h2 className="text-muted mb-3 text-sm font-medium">上传已有图片</h2>
+        <ImageDropzone onFile={onFile} disabled={upload.isPending} />
+      </section>
 
-      {stream.candidates.length > 0 && (
-        <section className="mt-6">
-          <h2 className="mb-3 text-sm font-medium text-ink">候选图</h2>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {stream.candidates.map((candidate) => (
-              <figure
-                key={candidate.assetId}
-                className="overflow-hidden rounded-card border border-line bg-paper shadow-card"
-              >
-                <img
-                  src={candidate.url}
-                  alt=""
-                  className="h-40 w-full object-cover"
-                  loading="lazy"
-                />
-                <figcaption className="px-3 py-2">
-                  <a
-                    href={candidate.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-brand transition hover:text-brand-strong"
-                  >
-                    查看原图
-                  </a>
-                </figcaption>
-              </figure>
-            ))}
-          </div>
-        </section>
-      )}
+      <section className="mt-10">
+        <div className="mb-3 flex items-baseline justify-between">
+          <h2 className="text-muted text-sm font-medium">历史素材</h2>
+          <Link to="/" className="text-brand hover:text-brand-strong text-xs transition">
+            管理全部素材
+          </Link>
+        </div>
+
+        {assets.isLoading && <p className="text-muted text-sm">加载中…</p>}
+        {assets.data && assets.data.items.length === 0 && (
+          <p className="text-faint text-sm">还没有素材，先生成一张或上传一张。</p>
+        )}
+
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+          {assets.data?.items.slice(0, 8).map((asset) => (
+            <AssetCard key={asset.id} asset={asset} onDelete={() => remove.mutate(asset.id)} />
+          ))}
+        </div>
+      </section>
     </div>
   )
 }
 
-function ProgressPanel({
-  status,
-  progress,
-  stage,
-}: {
-  status: RunStatus | null
-  progress: number
-  stage: string | null
-}) {
+function AssetCard({ asset, onDelete }: { asset: AssetOut; onDelete: () => void }) {
   return (
-    <section className="mt-6 rounded-card border border-line bg-paper p-5 shadow-card">
-      <div className="flex items-center justify-between text-sm">
-        <span className="text-ink">{status ? STATUS_LABEL[status] : '已提交'}</span>
-        <span className="font-mono text-xs text-faint">{progress}%</span>
-      </div>
-      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-soft">
-        <div
-          className="h-full rounded-full bg-brand transition-[width] duration-300"
-          style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-        />
-      </div>
-      {stage && <p className="mt-2 text-xs text-muted">{stage}</p>}
-    </section>
+    <figure className="border-line bg-paper shadow-card overflow-hidden rounded-card border">
+      <img src={asset.url} alt="" className="h-32 w-full object-cover" loading="lazy" />
+      <figcaption className="text-muted flex items-center justify-between px-3 py-2 text-xs">
+        <span className="font-mono">
+          {asset.width}×{asset.height}
+        </span>
+        <button type="button" onClick={onDelete} className="text-danger transition hover:opacity-70">
+          删除
+        </button>
+      </figcaption>
+    </figure>
   )
 }

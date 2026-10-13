@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from './client'
+import type { AssetOut } from './assets'
 import type { RunResult, RunStatus } from '@/domain/events'
 
 export interface RunOut {
@@ -32,5 +33,13 @@ export const createTextToImage = (payload: TextToImagePayload) =>
 export const listRuns = () => apiGet<RunOut[]>('/runs')
 
 export const getRun = (id: string) => apiGet<RunOut>(`/runs/${id}`)
+
+/**
+ * 这一次运行产出的素材（带预签名 URL）。
+ *
+ * 存在的意义：让候选页**可刷新、可分享**。只靠 SSE 内存里的事件恢复不了现场，
+ * 刷新一下这次生成的图就全丢了。
+ */
+export const listRunAssets = (id: string) => apiGet<AssetOut[]>(`/runs/${id}/assets`)
 
 export const cancelRun = (id: string) => apiPost<RunOut>(`/runs/${id}/cancel`)

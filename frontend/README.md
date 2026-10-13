@@ -7,10 +7,29 @@ src/
 ├── api/         REST 与 SSE 客户端；工具元数据统一从 /api/tools 拉取（M4）
 ├── domain/      ★ 画布领域层：layerDoc / transform / selection / history
 │                  刻意先于组件编写——参考项目的 CanvasStage 长到 1087 行就是没抽这层
+├── layouts/     WorkbenchLayout：左侧导航 + <Outlet />，全站外壳只有这一份
+├── hooks/       useRunStream（SSE 流 → 组件状态）
+├── components/  通用件：BrandMark / ImageDropzone / RunProgress / ProtectedRoute
 ├── stores/      Zustand：canvasView / editorUi / agentRun / toasts
-├── components/  canvas / agent / layers 三组
-└── pages/       Landing / Create / Editor / Batch / Marketing
+└── pages/       Create（创作）/ Candidates（候选）/ Home（素材库）/ Editor（编制中）
 ```
+
+## 路由
+
+| 路径 | 页面 | 说明 |
+|---|---|---|
+| `/login` | LoginPage | 未登录时的唯一入口 |
+| `/create` | CreatePage | 创作起点：生成 + 上传 + 历史素材一屏 |
+| `/candidates/:runId` | CandidatesPage | 候选图，**可刷新、可分享** |
+| `/` | HomePage | 素材库（全量列表 + 删除） |
+| `/editor` | EditorPage | M3 接入 Konva 画布 |
+
+`/login` 之外全部包在 `ProtectedRoute` → `WorkbenchLayout` 两层布局路由里，页面只写内容区。
+
+> **候选页为什么必须独立成路由**：run id 在 URL 上才谈得上刷新恢复与分享。
+> 内嵌方案里 run id 只活在内存，刷新一下这次生成的图就全丢了。
+> 首屏数据来自 REST（`GET /runs/{id}` + `GET /runs/{id}/assets`），
+> SSE **只负责还在跑的任务**的实时增量 —— 事件流从不做唯一数据源。
 
 ## 命令
 
