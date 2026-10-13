@@ -24,9 +24,11 @@
 
   --radius-card: 18px;
   --radius-control: 12px;
+  --radius-panel: 26px;
 
   --shadow-card: 0 16px 42px rgb(25 31 26 / 0.09);
   --shadow-control: 0 8px 22px rgb(27 31 27 / 0.08);
+  --shadow-lift: 0 20px 46px -18px rgb(20 26 20 / 0.18);
 }
 
 @layer base {
