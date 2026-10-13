@@ -33,6 +33,7 @@ export default defineConfig({
         // 改一行页面逻辑不该让用户把整个组件库重新下一遍。
         manualChunks: {
           antd: ['antd', '@ant-design/icons'],
+          konva: ['konva', 'react-konva'],
           react: ['react', 'react-dom', 'react-router-dom'],
         },
       },

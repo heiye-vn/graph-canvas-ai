@@ -11,8 +11,8 @@
  * 让点开链接的人顺手删掉原作者的素材是不合适的。
  */
 
-import { Button, Card, Popconfirm, Tag } from 'antd'
-import { DeleteOutlined, ExportOutlined } from '@ant-design/icons'
+import { Button, Card, Popconfirm, Tag, Tooltip } from 'antd'
+import { DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons'
 
 export interface AssetCardAsset {
   id: string
@@ -24,11 +24,14 @@ export interface AssetCardAsset {
 export default function AssetCard({
   asset,
   onDelete,
+  onEdit,
   pending = false,
 }: {
   asset: AssetCardAsset
   onDelete?: () => void
-  /** 推流刚到还没进库的候选：不给查看原图之外的操作，只打「刚刚生成」 */
+  /** 传了才出现「编辑」入口：用它这素材开一个编辑会话 */
+  onEdit?: () => void
+  /** 推流刚到还没进库的候选：只打「刚刚生成」，不给多余操作 */
   pending?: boolean
 }) {
   const dimension =
@@ -41,6 +44,7 @@ export default function AssetCard({
       variant="outlined"
       classNames={{ body: 'px-3! py-2.5!' }}
       cover={<img src={asset.url} alt="" className="h-36 w-full object-cover" loading="lazy" />}
+      actions={onEdit ? [<EditButton key="edit" onEdit={onEdit} />] : undefined}
     >
       <div className="flex items-center justify-between gap-2">
         {pending ? (
@@ -84,5 +88,13 @@ export default function AssetCard({
         </div>
       </div>
     </Card>
+  )
+}
+
+function EditButton({ onEdit }: { onEdit: () => void }) {
+  return (
+    <Tooltip title="用它新建一个编辑会话">
+      <Button type="text" icon={<EditOutlined />} onClick={onEdit} aria-label="编辑这张素材" />
+    </Tooltip>
   )
 }

@@ -14,9 +14,11 @@ import { deleteAsset, listAssets } from '@/api/assets'
 import AssetCard from '@/components/AssetCard'
 import { APP_TAGLINE } from '@/lib/brand'
 import PageHeader from '@/components/PageHeader'
+import { useCreateSessionAndEdit } from '@/hooks/useCreateSession'
 
 export default function AssetsPage() {
   const queryClient = useQueryClient()
+  const openEditor = useCreateSessionAndEdit()
 
   const { data, isLoading } = useQuery({ queryKey: ['assets'], queryFn: listAssets })
 
@@ -52,7 +54,12 @@ export default function AssetsPage() {
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {data?.items.map((asset) => (
-            <AssetCard key={asset.id} asset={asset} onDelete={() => remove.mutate(asset.id)} />
+            <AssetCard
+              key={asset.id}
+              asset={asset}
+              onDelete={() => remove.mutate(asset.id)}
+              onEdit={() => openEditor.mutate({ asset_ids: [asset.id] })}
+            />
           ))}
         </div>
       )}

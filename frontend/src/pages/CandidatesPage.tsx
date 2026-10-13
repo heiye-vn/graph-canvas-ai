@@ -20,6 +20,7 @@ import type { RunOut } from '@/api/runs'
 import AssetCard from '@/components/AssetCard'
 import PageHeader from '@/components/PageHeader'
 import { RunProgress } from '@/components/RunProgress'
+import { useCreateSessionAndEdit } from '@/hooks/useCreateSession'
 import { useRunStream } from '@/hooks/useRunStream'
 import { isTerminalStatus } from '@/domain/events'
 import type { RunStatus } from '@/domain/events'
@@ -27,6 +28,7 @@ import type { RunStatus } from '@/domain/events'
 export default function CandidatesPage() {
   const { runId = '' } = useParams()
   const queryClient = useQueryClient()
+  const openEditor = useCreateSessionAndEdit()
 
   const run = useQuery({
     queryKey: ['run', runId],
@@ -94,6 +96,22 @@ export default function CandidatesPage() {
         extra={
           isTerminalStatus(data.status) ? (
             <Space>
+              <Button
+                type="primary"
+                loading={openEditor.isPending}
+                disabled={total === 0}
+                onClick={() =>
+                  openEditor.mutate({
+                    asset_ids: [
+                      ...finished.map((asset) => asset.id),
+                      ...live.map((candidate) => candidate.assetId),
+                    ],
+                    title: prompt ? `${prompt.slice(0, 20)}…` : undefined,
+                  })
+                }
+              >
+                在画布中编辑
+              </Button>
               <Link to="/create">
                 <Button>再生成一组</Button>
               </Link>
