@@ -120,6 +120,38 @@ def test_cancelled_run_is_skipped():
     assert result is None  # 取消之后不能再被 worker 覆盖成成功
 
 
+def test_run_assets_are_returned_in_generation_order():
+    """候选页刷新后靠这个恢复现场：顺序错了，用户会以为图被换掉了。"""
+
+    async def scenario():
+        from app.services import assets as asset_service
+
+        run_id, user_id = await _seed_run({"prompt": "red bottle", "size": "96x96", "n": 3})
+        await _run_and_collect(run_id)
+
+        async with runs_service.session_scope() as session:
+            run = await session.get(ToolRun, run_id)
+            ids = [uuid.UUID(value) for value in run.result["asset_ids"]]
+            in_order = await asset_service.list_assets_by_ids(session, user_id, ids)
+            reversed_order = await asset_service.list_assets_by_ids(
+                session, user_id, list(reversed(ids))
+            )
+            foreign = await asset_service.list_assets_by_ids(session, uuid.uuid4(), ids)
+            empty = await asset_service.list_assets_by_ids(session, user_id, [])
+            return (
+                [str(a.id) for a in in_order],
+                [str(a.id) for a in reversed_order],
+                foreign,
+                empty,
+            )
+
+    in_order, reversed_order, foreign, empty = run_async(scenario())
+    assert in_order == list(reversed(reversed_order))
+    assert set(in_order) == set(reversed_order)
+    assert foreign == []  # 别人的 id 一律忽略，不是报错
+    assert empty == []
+
+
 def test_provider_failure_is_recorded_and_broadcast(monkeypatch):
     class BoomProvider:
         name = "boom"

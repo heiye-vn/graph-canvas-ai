@@ -11,6 +11,8 @@ from app.db import get_session
 from app.deps import get_current_user
 from app.models import ToolRun, User
 from app.models.run import TERMINAL_STATUSES
+from app.schemas.asset import AssetOut
+from app.services import assets as asset_service
 from app.services import queue
 from app.services import runs as runs_service
 
@@ -89,6 +91,31 @@ async def get_run(
     session: AsyncSession = Depends(get_session),
 ) -> ToolRun:
     return await runs_service.get_run(session, user.id, run_id)
+
+
+@router.get("/{run_id}/assets", response_model=list[AssetOut])
+async def list_run_assets(
+    run_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[AssetOut]:
+    """这一次运行产出了哪些图。
+
+    有了这个端点，候选页就不再依赖**内存里的 SSE 事件** —— 刷新页面 / 直接分享链接
+    都能还原现场。SSE 只负责实时增量，现场恢复一律走这里。
+    """
+    run = await runs_service.get_run(session, user.id, run_id)
+
+    raw = (run.result or {}).get("asset_ids") or []
+    asset_ids: list[uuid.UUID] = []
+    for item in raw:
+        try:
+            asset_ids.append(uuid.UUID(str(item)))
+        except ValueError:
+            continue  # 脏数据跳过，不该让一条坏 id 让整个列表 500
+
+    items = await asset_service.list_assets_by_ids(session, user.id, asset_ids)
+    return [asset_service.asset_to_out(a) for a in items]
 
 
 @router.post("/{run_id}/cancel", response_model=RunOut)

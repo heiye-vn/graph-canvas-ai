@@ -162,6 +162,24 @@ async def list_assets(session: AsyncSession, user_id: uuid.UUID) -> list[Asset]:
     return list(result.scalars().all())
 
 
+async def list_assets_by_ids(
+    session: AsyncSession, user_id: uuid.UUID, asset_ids: list[uuid.UUID]
+) -> list[Asset]:
+    """按 id 取本人素材，**并保持传入顺序**。
+
+    候选图页刷新后要靠这里恢复现场：顺序是有语义的（第 1 张 / 第 2 张），
+    按 created_at 重排会让用户以为图变了。
+    越权的 id 直接忽略——同一次取多个资源时不该因为一个不属于我就整体 404。
+    """
+    if not asset_ids:
+        return []
+    result = await session.execute(
+        select(Asset).where(Asset.user_id == user_id, Asset.id.in_(asset_ids))
+    )
+    by_id = {asset.id: asset for asset in result.scalars().all()}
+    return [by_id[asset_id] for asset_id in asset_ids if asset_id in by_id]
+
+
 async def get_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid.UUID) -> Asset:
     asset = await session.get(Asset, asset_id)
     if asset is None or asset.user_id != user_id:

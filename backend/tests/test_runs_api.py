@@ -160,6 +160,23 @@ def test_other_users_run_is_invisible(client: TestClient):
     )
 
 
+def test_fresh_run_has_no_assets_yet(client: TestClient, user: dict):
+    run = create_run(client, user)
+    assert client.get(f"/api/runs/{run['id']}/assets", headers=auth(user)).json() == []
+
+
+def test_other_users_run_assets_are_404(client: TestClient, user: dict):
+    """候选页链接被转发给别人时不能泄露——404 而不是空列表。"""
+    other = client.post(
+        "/api/auth/register",
+        json={"email": unique_email(), "password": "Strong-Pass-123"},
+    ).json()
+    other_headers = {"Authorization": f"Bearer {other['token']['access_token']}"}
+    run = create_run(client, user)
+
+    assert client.get(f"/api/runs/{run['id']}/assets", headers=other_headers).status_code == 404
+
+
 def test_sse_sends_snapshot_immediately(client: TestClient, user: dict):
     """建立连接后必须立刻有一帧：否则「任务已结束」时客户端会永远空等。"""
     run = create_run(client, user)
