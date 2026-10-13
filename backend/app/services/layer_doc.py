@@ -13,6 +13,8 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from pydantic import BaseModel
+
 from app.schemas.layer_doc import (
     DEFAULT_LAYER_NAME,
     Canvas,
@@ -82,6 +84,84 @@ def add_layer(doc: LayerDocument, layer: Layer) -> LayerDocument:
     updated = doc.model_copy(deep=True)
     updated.layers.append(layer)
     return LayerDocument.model_validate(updated.model_dump(mode="json"))
+
+
+def update_layer(
+    doc: LayerDocument,
+    layer_id: uuid.UUID,
+    patch: dict[str, Any],
+) -> LayerDocument:
+    """改图层字段（transform / adjustments / name …）。
+
+    patch 里允许嵌套 dict（比如只改 transform.x），这里做一层浅合并，
+    调用方就不必先把整个 transform 读出来再整体写回。
+    """
+    updated = doc.model_copy(deep=True)
+    for layer in updated.layers:
+        if layer.id != layer_id:
+            continue
+        for key, value in patch.items():
+            current = getattr(layer, key, None)
+            if isinstance(current, BaseModel) and isinstance(value, dict):
+                merged = current.model_dump()
+                merged.update(value)
+                setattr(layer, key, type(current).model_validate(merged))
+            else:
+                setattr(layer, key, value)
+        return LayerDocument.model_validate(updated.model_dump(mode="json"))
+
+    raise LayerNotFoundError(str(layer_id))
+
+
+def reorder_layer(doc: LayerDocument, layer_id: uuid.UUID, index: int) -> LayerDocument:
+    """把图层移到指定层级（0 = 最底层）。"""
+    if index < 0 or index >= len(doc.layers):
+        raise LayerNotFoundError(str(layer_id))
+
+    layers = [layer for layer in doc.layers if layer.id != layer_id]
+    moved = next((layer for layer in doc.layers if layer.id == layer_id), None)
+    if moved is None:
+        raise LayerNotFoundError(str(layer_id))
+
+    layers.insert(index, moved)
+    return LayerDocument.model_validate({**doc.model_dump(mode="json"), "layers": [
+        layer.model_dump(mode="json") for layer in layers
+    ]})
+
+
+def switch_current_image(doc: LayerDocument, layer_id: uuid.UUID) -> LayerDocument:
+    """把某张候选图设为「当前图」：它可见，其余**图像层**隐藏。
+
+    只动 image 层是有意的：切一张候选图不该顺手把用户自己加的文字/形状也藏了。
+    """
+    target = resolve_layer(doc, str(layer_id))
+    if target.type != "image":
+        raise LayerNotFoundError(str(layer_id))
+
+    layers = [
+        {**layer.model_dump(mode="json"), "visible": layer.id == target.id}
+        if layer.type == "image"
+        else layer.model_dump(mode="json")
+        for layer in doc.layers
+    ]
+    return LayerDocument.model_validate(
+        {
+            **doc.model_dump(mode="json"),
+            "layers": layers,
+            "active_layer_id": str(target.id),
+        }
+    )
+
+
+def set_active_layer(doc: LayerDocument, layer_id: uuid.UUID | None) -> LayerDocument:
+    if layer_id is not None and not any(layer.id == layer_id for layer in doc.layers):
+        raise LayerNotFoundError(str(layer_id))
+    return LayerDocument.model_validate(
+        {
+            **doc.model_dump(mode="json"),
+            "active_layer_id": None if layer_id is None else str(layer_id),
+        }
+    )
 
 
 def remove_layer(doc: LayerDocument, layer_id: uuid.UUID) -> LayerDocument:

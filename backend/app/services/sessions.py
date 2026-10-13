@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import EditSession, SessionAsset
 from app.models.session import DEFAULT_TITLE
 from app.schemas.layer_doc import LayerDocument
+from app.schemas.session import SessionOut
 from app.services import assets as asset_service
 from app.services import layer_doc as layer_doc_service
 
@@ -69,6 +70,28 @@ def build_initial_doc(assets: list) -> LayerDocument:
 
     doc.active_layer_id = doc.layers[0].id
     return doc
+
+
+async def to_out(session: AsyncSession, edit_session: EditSession) -> SessionOut:
+    """把 ORM 对象组装成响应（文档按 LayerDocument 解析，素材补预签名 URL）。
+
+    放在服务层而不是路由里：编辑会话与工具执行两个入口都要返回同一种结构，
+    各写一份必然会在某次改动后分叉。
+    """
+    from app.schemas.layer_doc import LayerDocument
+
+    doc = LayerDocument.model_validate(edit_session.doc)
+    asset_ids = await session_assets(session, edit_session.id)
+    found = await asset_service.list_assets_by_ids(session, edit_session.user_id, asset_ids)
+
+    return SessionOut(
+        id=edit_session.id,
+        title=edit_session.title,
+        doc=doc,
+        assets=[asset_service.asset_to_out(asset) for asset in found],
+        created_at=edit_session.created_at,
+        updated_at=edit_session.updated_at,
+    )
 
 
 async def create_session(

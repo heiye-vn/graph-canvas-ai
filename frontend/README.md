@@ -12,6 +12,7 @@ src/
 ├── lib/         brand / marketing（文案集中）/ antdTheme（组件库主题）
 ├── components/  通用件：BrandMark / PageHeader / AssetCard / RunProgress / ProtectedRoute
 │                editor/：画布专属件（CanvasStage / LayerPanel / useLoadedImages）
+│                         ToolPanel（元数据驱动表单）/ AgentBar（一句话改图）
 │                landing/：落地页专属组件（Hero / PromptComposer / Showcase / Steps / CTA）
 ├── stores/      Zustand：canvasView / editorUi / agentRun / toasts
 └── pages/       Landing（公开）/ Assets / Create / Candidates / Editor（索引 + 详情）
@@ -102,6 +103,9 @@ esbuild 的 postinstall 会 `spawnSync node esbuild --version` 做二进制校�
 
 - 业务接口走 `/api`，探针与 SSE 走根路径（`/ready`、`/events`），已在 `vite.config.ts` 配好代理。
 - 工具标签与参数表单**全部由后端 `/api/tools` 下发**，前端不硬编码任何工具名清单。
+  `ToolPanel` 里没有一个 `if (name === 'xxx')` 分支 —— 参数模型决定了渲染成输入框、
+  数字框、下拉还是开关。**新增工具时前端一行都不用改**，这是 M4 的验收项之一。
+  `agent_hidden` 的参数在表单上带 🔒 标记：它由界面选择或服务端回填，不是给人填的。
 - 素材卡统一用 `components/AssetCard` —— 创作页历史素材、素材库、候选页此前有三份
   figure 各自为政，改一次圆角必然漏两处。
 - **编辑会话的状态只有一个真相源**：服务端那份 LayerDocument。

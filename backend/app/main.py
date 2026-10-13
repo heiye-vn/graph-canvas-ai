@@ -82,13 +82,16 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
 
     # 业务路由统一挂 /api
-    from app.routers import assets, auth, runs
+    from app.routers import agent, assets, auth, runs
     from app.routers.edit_sessions import router as edit_session_router
+    from app.routers.tools import router as tools_router
 
     app.include_router(auth.router, prefix=settings.api_prefix)
     app.include_router(assets.router, prefix=settings.api_prefix)
     app.include_router(runs.router, prefix=settings.api_prefix)
     app.include_router(edit_session_router, prefix=settings.api_prefix)
+    app.include_router(tools_router, prefix=settings.api_prefix)
+    app.include_router(agent.router, prefix=settings.api_prefix)
 
     # SSE 不挂业务前缀，便于反向代理单独关掉缓冲
     from app.routers import events

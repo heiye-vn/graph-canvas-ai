@@ -11,12 +11,18 @@ app/
 ├── db.py         SQLAlchemy 异步引擎与会话
 ├── routers/      只做校验与响应组装
 ├── services/     业务编排与基础设施适配（执行外壳 / 编排 / 会话 / 选区 / 存储 / 事件）
-│   └── layer_doc.py  图层文档读写（纯函数）；UI 与 Agent 共用同一份「找哪一层」的规则
+│   ├── layer_doc.py   图层文档读写（纯函数）；UI 与 Agent 共用同一份「找哪一层」的规则
+│   ├── tool_exec.py   工具执行外壳：调一次工具 + 生成给模型的文档摘要
+│   └── agent_step.py  单步自然语言：解析 → 执行 → 回执
 ├── schemas/
 │   ├── layer_doc.py  图层文档结构 —— 前端画布与服务端工具之间的契约
 ├── tools/        工具注册表（M4）——一处定义，同时服务服务端校验与 LLM function schema
+│   ├── base.py       ToolSpec / ToolContext / ToolResult；参数错一律 ToolError
+│   ├── registry.py   注册与查询；重复注册直接抛错
+│   └── builtins.py   13 个内置工具（导入即注册）
 ├── edits/        图像原子能力（像素 / 遮罩 / 分割 / 拆层 / 渲染 / OCR）
-├── agent/        LangGraph 状态机、计划校验、prompt 版本（M8–M9）
+├── agent/        LLM 接入（`llm.py`：schema 派生 + 单次规划）；LangGraph 状态机、
+│                 计划校验、prompt 版本在 M8–M9
 ├── providers/    模型 Provider（mock / dashscope），用 Protocol 而非 ABC
 └── eval/         Agent 规划质量评测集（M10）
 ```
@@ -66,7 +72,33 @@ pytest                                        # 测试（需要 PG / Redis / 对
 > 得到不同结果，而且很难复现。
 >
 > 文档写入走**整份替换**而非 patch：一次操作可能同时改变层级顺序、可见性和载荷，
-> 用 diff 表达这些既啰嗦又容易错。乐观并发保护留到 M4 工具入口真正并发时再加。
+> 用 diff 表达这些既啰嗦又容易错。乐观并发保护留到 M5 撤销栈真正并发时再加。
+
+### 工具与 Agent（M4）
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/tools` | 工具元数据（name / label / group / 参数表单描述），前端表单的唯一来源 |
+| POST | `/api/tools/{name}/invoke` | 直接调一个工具（参数错 → 422 `bad_params`） |
+| POST | `/api/agent/step` | 一句话 → LLM 选工具 → 执行 → 回执（工具/参数/说明） |
+
+已注册 13 个工具：`adjust_color` `set_opacity` `set_layer_visible` `rename_layer`
+`reorder_layer` `switch_current_image` `remove_layer` `add_image_layer` `move_layer`
+`resize_layer` `rotate_layer` `add_text_layer` `set_canvas_background`。
+
+> **一处定义三处消费**：工具的入参只写一份 Pydantic Model，同时派生
+> ① 服务端校验（`model_validate`）、② LLM function schema、③ `/api/tools` 的表单元数据。
+> 三处手工同步必然漂移 —— 那是「新增工具后前端表单对不上」这类 bug 的固定来源。
+>
+> **`agent_hidden` 是硬边界**：`add_image_layer.asset_id` 标了它，不会出现在给模型的
+> schema 里。让模型生成 UUID 只有两种结果：幻觉一个不存在的，或者把上下文里
+> 见过的别的 ID 串过来。这类参数由界面选择 / 服务端回填。
+>
+> **给模型的上下文里没有 UUID**：`summarize_doc()` 只给图层名、类型、可见性与层级序号。
+> 模型靠名字指认图层（"把背景调亮"），内部 ID 不该出现在它的世界里。
+>
+> **参数校验失败必须来自服务端**：模型传错类型时，报的是 Pydantic 的错（含字段与原因），
+> 不是模型自己瞎猜后写进文档。这一步在 `ToolSpec.parse()`，所有工具共享。
 
 ## 环境变量
 

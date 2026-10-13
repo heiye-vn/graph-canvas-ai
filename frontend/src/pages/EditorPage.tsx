@@ -17,8 +17,10 @@ import { SaveOutlined } from '@ant-design/icons'
 
 import { getSession, replaceSessionDoc } from '@/api/sessions'
 import type { SessionOut } from '@/api/sessions'
+import AgentBar from '@/components/editor/AgentBar'
 import CanvasStage from '@/components/editor/CanvasStage'
 import LayerPanel from '@/components/editor/LayerPanel'
+import ToolPanel from '@/components/editor/ToolPanel'
 import { useLoadedImages } from '@/components/editor/useLoadedImages'
 import PageHeader from '@/components/PageHeader'
 import type { LayerDocument } from '@/domain/layerDoc'
@@ -119,6 +121,11 @@ export default function EditorPage() {
         />
       )}
 
+      <div className="border-line bg-paper shadow-card rounded-card mb-6 border p-4">
+        <h2 className="text-muted mb-2 text-sm font-medium">一句话改图</h2>
+        <AgentBar sessionId={sessionId} />
+      </div>
+
       <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
         <section className="border-line bg-paper shadow-card flex min-h-[26rem] items-start justify-center rounded-card border p-4">
           <CanvasStage doc={doc} images={images} loading={pending} />
@@ -131,6 +138,9 @@ export default function EditorPage() {
             onToggleVisible={(layerId, visible) => commit(setLayerVisible(doc, layerId, visible))}
             onSwitchCurrent={(layerId) => commit(switchCurrentImage(doc, layerId))}
           />
+
+          <h2 className="text-muted mt-6 mb-2 text-sm font-medium">工具</h2>
+          <ToolPanel sessionId={sessionId} />
         </aside>
       </div>
     </div>

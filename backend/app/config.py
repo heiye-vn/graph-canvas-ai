@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     image_edit_model: str = "qwen-image-edit"
     planner_model: str = "qwen-plus"
 
+    # ---- Agent（M4）----
+    # OpenAI 兼容端点；国内网络默认走百炼的兼容模式，换自建/其它厂商只改这一个变量
+    llm_base_url: str | None = None
+    llm_temperature: float = 0.0
+
     # ---- 可观测（M9.3 启用，缺失时不阻塞启动）----
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
@@ -83,6 +88,16 @@ class Settings(BaseSettings):
                 f"JWT_SECRET 仅 {len(self.jwt_secret)} 字节，生产环境至少需要 32 字节（建议 64）"
             )
         return self
+
+    def require_llm_config(self) -> tuple[str, str, str]:
+        """Agent 链路真正要调模型时才校验（base_url, api_key, model）。
+
+        与 `require_dashscope_key` 同一口径：**缺配置立即失败**，
+        不静默降级到「假装理解了」的假规划。
+        """
+        key = self.require_dashscope_key()
+        base = self.llm_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        return base, key, self.planner_model
 
     def require_dashscope_key(self) -> str:
         """规划/生图链路真正要用 Key 时才校验，避免 mock 模式下被迫填一堆空变量。"""
