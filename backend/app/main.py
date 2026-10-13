@@ -83,10 +83,12 @@ def create_app() -> FastAPI:
 
     # 业务路由统一挂 /api
     from app.routers import assets, auth, runs
+    from app.routers.edit_sessions import router as edit_session_router
 
     app.include_router(auth.router, prefix=settings.api_prefix)
     app.include_router(assets.router, prefix=settings.api_prefix)
     app.include_router(runs.router, prefix=settings.api_prefix)
+    app.include_router(edit_session_router, prefix=settings.api_prefix)
 
     # SSE 不挂业务前缀，便于反向代理单独关掉缓冲
     from app.routers import events
