@@ -27,13 +27,19 @@ cd backend
 uv sync --extra dev                     # 或再加 --extra agent / --extra cv
 uv run uvicorn app.main:app --port 7302 --reload
 
-# 3) 前端
+# 3) 异步任务 worker（M2 起**必须与 API 同时跑**，再开一个终端）
+uv run arq app.worker.WorkerSettings
+
+# 4) 前端
 cd frontend
 npm install --ignore-scripts             # 本机必须带该参数，见 frontend/README.md
 npm run dev                              # http://localhost:7301
 ```
 
 打开 <http://localhost:7301>，落地页会实时显示后端 `/ready` 的三项依赖状态（Postgres / Redis / 对象存储）。
+
+> ⚠️ **worker 必须挂着**：容器只负责 Postgres / Redis / 对象存储，任务执行在 worker 进程里。
+> 少跑它的表现是生成任务永远停在「排队中」——不是接口坏了。
 
 > ⚠️ 本机 `localhost` 会解析到 IPv6 `::1`，而 compose 端口只绑 `127.0.0.1`。
 > 环境变量里一律写 `127.0.0.1`，否则 Redis 会连接超时。
