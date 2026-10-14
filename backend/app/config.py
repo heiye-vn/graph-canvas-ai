@@ -59,8 +59,10 @@ class Settings(BaseSettings):
     # mock 使用本地占位图，不产生任何调用费用，也不需要 Key
     image_provider: Literal["mock", "dashscope"] = "mock"
     dashscope_api_key: str | None = None
-    text_to_image_model: str = "qwen-image"
-    image_edit_model: str = "qwen-image-edit"
+    # 生图/编辑默认取 qwen-image-3.0：DashScopeProvider 实现的是 messages 式端点，
+    # 该契约覆盖 3.0 / 2.1 系列（可选值见 .env.example）；老端点的模型名不在支持范围
+    text_to_image_model: str = "qwen-image-3.0"
+    image_edit_model: str = "qwen-image-3.0"
     planner_model: str = "qwen-plus"
 
     # ---- Agent（M4）----

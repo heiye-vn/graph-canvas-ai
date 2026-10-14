@@ -19,11 +19,11 @@ app/
 ├── tools/        工具注册表（M4）——一处定义，同时服务服务端校验与 LLM function schema
 │   ├── base.py       ToolSpec / ToolContext / ToolResult；参数错一律 ToolError
 │   ├── registry.py   注册与查询；重复注册直接抛错
-│   └── builtins.py   13 个内置工具（导入即注册）
+│   └── builtins.py   16 个内置工具（导入即注册）
 ├── edits/        图像原子能力（像素 / 遮罩 / 分割 / 拆层 / 渲染 / OCR）
 ├── agent/        LLM 接入（`llm.py`：schema 派生 + 单次规划）；LangGraph 状态机、
 │                 计划校验、prompt 版本在 M8–M9
-├── providers/    模型 Provider（mock / dashscope），用 Protocol 而非 ABC
+├── providers/    模型 Provider（mock / dashscope），用 Protocol 而非 ABC；返回 bytes 不返回 URL
 └── eval/         Agent 规划质量评测集（M10）
 ```
 
@@ -130,6 +130,24 @@ pytest                                        # 测试（需要 PG / Redis / 对
 >
 > **参数校验失败必须来自服务端**：模型传错类型时，报的是 Pydantic 的错（含字段与原因），
 > 不是模型自己瞎猜后写进文档。这一步在 `ToolSpec.parse()`，所有工具共享。
+
+## 模型 Provider
+
+`ImageProvider` 是 `typing.Protocol`（非 ABC）：实现类不显式继承，所有方法返回**图片字节**，不返回 URL —— 外部结果图 URL 有有效期（DashScope 24h），Provider 内部先下载转存，调用方永远拿到能长期用的 bytes。
+
+| 实现 | 说明 |
+|---|---|
+| `mock` | 本地占位图（带 MOCK 水印），同一 prompt 确定性输出，不联网不花钱 |
+| `dashscope` | 阿里云百炼 qwen-image 3.0 / 2.1 系列：messages 式**异步**任务（必须带 `X-DashScope-Async: enable` 头）→ 轮询 `/api/v1/tasks/{id}` → 下载签名 OSS 直链（**不带 Authorization**）；图生图参考图走 Base64 data URL（≤10MB） |
+
+> **红线**：工厂对未接入的 provider 显式 `RuntimeError`，**绝不静默回退 mock** ——
+> 「以为在调真模型、实际一直出占位图」是比崩溃恶劣得多的故障。
+> DashScope 的接口契约（异步头 / 星号 size `1024*1024` / Base64 参考图 /
+> 结果在 `output.choices[].message.content[].image`）已钉进 `tests/test_providers.py`
+> 的 MockTransport 用例，要改协议先改测试。
+
+> 切换 provider 后**必须重启 API 与 worker**：Settings 是进程级缓存，
+> worker 启动时即预热 provider（选了真 provider 却缺 Key，启动立刻失败）。
 
 ## 环境变量
 

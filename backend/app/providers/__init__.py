@@ -2,6 +2,9 @@
 
 用 lru_cache 做进程级单例（连接池/客户端不该每次请求重建），
 同时暴露 clear() 供测试切换实现——缓存不清理是测试污染的经典来源。
+
+红线不变：未接入的实现显式报错，绝不静默回退 mock——
+「以为在调真模型、实际一直出占位图」是比崩溃恶劣得多的故障。
 """
 
 from __future__ import annotations
@@ -10,6 +13,7 @@ from functools import lru_cache
 
 from app.config import get_settings
 from app.providers.base import ImageProvider
+from app.providers.dashscope import DashscopeProvider
 from app.providers.mock import MockProvider
 
 
@@ -18,9 +22,17 @@ def get_image_provider() -> ImageProvider:
     settings = get_settings()
     if settings.image_provider == "mock":
         return MockProvider()
+    if settings.image_provider == "dashscope":
+        # 缺 Key 在这里立刻失败（worker 启动即预热，等于启动自检），
+        # 而不是拖到第一个任务才炸
+        return DashscopeProvider(
+            api_key=settings.require_dashscope_key(),
+            text_model=settings.text_to_image_model,
+            edit_model=settings.image_edit_model,
+        )
     raise RuntimeError(
         f"尚未接入 provider={settings.image_provider}。"
-        "当前阶段请保持 IMAGE_PROVIDER=mock，后续接入真实模型时在此补实现。"
+        "可选值见 .env.example（当前支持 mock / dashscope）。"
     )
 
 

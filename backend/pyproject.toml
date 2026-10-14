@@ -22,6 +22,8 @@ dependencies = [
     "bcrypt>=4.2",
     "email-validator>=2.2",
     "python-multipart>=0.0.20",
+    # dashscope Provider 的 HTTP 客户端（worker 与 API 都在运行时用，不是测试专用）
+    "httpx>=0.28",
 ]
 
 # 依赖分层（照抄参考项目的克制做法）：
@@ -46,7 +48,6 @@ cv = [
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.25",
-    "httpx>=0.28",
     "ruff>=0.9",
 ]
 
