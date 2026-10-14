@@ -426,6 +426,7 @@ dependencies = [
     { name = "boto3" },
     { name = "email-validator" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "pillow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -451,7 +452,6 @@ cv = [
     { name = "rembg" },
 ]
 dev = [
-    { name = "httpx" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "ruff" },
@@ -466,7 +466,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "email-validator", specifier = ">=2.2" },
     { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "langchain-core", marker = "extra == 'agent'", specifier = ">=0.3" },
     { name = "langchain-openai", marker = "extra == 'agent'", specifier = ">=0.2" },
     { name = "langgraph", marker = "extra == 'agent'", specifier = ">=0.2" },
