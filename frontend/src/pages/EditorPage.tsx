@@ -121,12 +121,16 @@ export default function EditorPage() {
     runTool.mutate({ name, params })
   }
 
-  /** 画布导出：Konva Stage 直接出 PNG（所见即所得，含调色/裁剪/翻转后的效果）。 */
+  /** 画布导出：Konva Stage 直接出 PNG（严格按画布设定分辨率 1:1 输出）。 */
   function exportPng() {
     const stage = stageRef.current
     if (!stage || !data) return
+    // 抵消 Stage 当前为了适应屏幕或用户缩放产生的 scale，确保导出尺寸精确等于画布基准尺寸（如 1024x1024）
+    const currentScale = stage.scaleX() || 1
+    const pixelRatio = 1 / currentScale
+
     const link = document.createElement('a')
-    link.href = stage.toDataURL({ pixelRatio: 2 })
+    link.href = stage.toDataURL({ pixelRatio, mimeType: 'image/png' })
     link.download = `${data.title || '画布'}.png`
     link.click()
   }

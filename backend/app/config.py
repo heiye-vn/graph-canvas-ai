@@ -57,10 +57,14 @@ class Settings(BaseSettings):
 
     # ---- 模型 Provider ----
     # mock 使用本地占位图，不产生任何调用费用，也不需要 Key
-    image_provider: Literal["mock", "dashscope"] = "mock"
+    # dashscope 走阿里云百炼原生生图端点
+    # openai 走第三方中转站/标准 OpenAI /v1/images/generations 端点
+    image_provider: Literal["mock", "dashscope", "openai"] = "mock"
     dashscope_api_key: str | None = None
-    # 生图/编辑默认取 qwen-image-3.0：DashScopeProvider 实现的是 messages 式端点，
-    # 该契约覆盖 3.0 / 2.1 系列（可选值见 .env.example）；老端点的模型名不在支持范围
+    # 中转站 / OpenAI 兼容生图端点与独立 Key（若留空则自动 fallback 到通用 key）
+    image_base_url: str | None = None
+    image_api_key: str | None = None
+    # 生图/编辑模型名（百炼可用 qwen-image-3.0 等；中转站可用 gpt-image-2 / gemini-3-pro-image 等）
     text_to_image_model: str = "qwen-image-3.0"
     image_edit_model: str = "qwen-image-3.0"
     planner_model: str = "qwen-plus"
@@ -102,13 +106,23 @@ class Settings(BaseSettings):
         return base, key, self.planner_model
 
     def require_dashscope_key(self) -> str:
-        """规划/生图链路真正要用 Key 时才校验，避免 mock 模式下被迫填一堆空变量。"""
+        """规划/百炼生图链路真正要用 Key 时才校验，避免 mock 模式下被迫填一堆空变量。"""
         if not self.dashscope_api_key:
             raise RuntimeError(
-                "DASHSCOPE_API_KEY 未配置：当前操作需要调用真实模型。"
+                "DASHSCOPE_API_KEY 未配置：当前操作需要调用阿里云百炼模型。"
                 "纯本地跑通流程请保持 IMAGE_PROVIDER=mock 且只使用确定性工具。"
             )
         return self.dashscope_api_key
+
+    def require_image_api_key(self) -> str:
+        """中转站生图链路真正要用 Key 时才校验。优先用 IMAGE_API_KEY，缺省时 fallback 到 DASHSCOPE_API_KEY。"""
+        key = self.image_api_key or self.dashscope_api_key
+        if not key:
+            raise RuntimeError(
+                "IMAGE_API_KEY 未配置：当前 IMAGE_PROVIDER=openai 需要中转站生图 Key。"
+                "请在 .env 中配置 IMAGE_API_KEY。"
+            )
+        return key
 
 
 @lru_cache(maxsize=1)

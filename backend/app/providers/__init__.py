@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.providers.base import ImageProvider
 from app.providers.dashscope import DashscopeProvider
 from app.providers.mock import MockProvider
+from app.providers.openai import OpenAIImageProvider
 
 
 @lru_cache(maxsize=1)
@@ -30,9 +31,16 @@ def get_image_provider() -> ImageProvider:
             text_model=settings.text_to_image_model,
             edit_model=settings.image_edit_model,
         )
+    if settings.image_provider == "openai":
+        return OpenAIImageProvider(
+            api_key=settings.require_image_api_key(),
+            text_model=settings.text_to_image_model,
+            edit_model=settings.image_edit_model,
+            base_url=settings.image_base_url or "https://api.monkeycoding.club/v1",
+        )
     raise RuntimeError(
         f"尚未接入 provider={settings.image_provider}。"
-        "可选值见 .env.example（当前支持 mock / dashscope）。"
+        "可选值见 .env.example（当前支持 mock / dashscope / openai）。"
     )
 
 

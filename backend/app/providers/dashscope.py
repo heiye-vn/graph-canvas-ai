@@ -30,16 +30,10 @@ from typing import Any
 
 import httpx
 
+from app.providers.base import ProviderError
 
 # Provider 层的失败对外要能被任务层翻译成 run.error，用最普通的异常即可；
 # 刻意不继承 ToolError —— 那是「工具参数错」的语义，混用会让错误码失真。
-class ProviderError(RuntimeError):
-    """外部模型调用失败（创建任务失败 / 任务失败 / 轮询超时 / 下载失败）。"""
-
-    def __init__(self, message: str, *, code: str = "provider_failed") -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com"

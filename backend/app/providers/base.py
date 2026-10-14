@@ -13,6 +13,15 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 
+class ProviderError(RuntimeError):
+    """外部模型调用失败（HTTP 错误 / 鉴权失败 / 余额不足 / 格式异常 / 超时）。"""
+
+    def __init__(self, message: str, *, code: str = "provider_failed") -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 @runtime_checkable
 class ImageProvider(Protocol):
     name: str

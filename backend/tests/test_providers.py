@@ -31,6 +31,7 @@ from app.providers.dashscope import (
     ProviderError,
 )
 from app.providers.mock import MockProvider
+from app.providers.openai import OpenAIImageProvider
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +104,27 @@ def test_factory_requires_api_key_for_dashscope(monkeypatch):
     monkeypatch.setattr(settings, "dashscope_api_key", None)
     clear_provider_cache()
     with pytest.raises(RuntimeError, match="DASHSCOPE_API_KEY"):
+        get_image_provider()
+
+
+def test_factory_returns_openai_provider(monkeypatch):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "image_provider", "openai")
+    monkeypatch.setattr(settings, "image_api_key", "sk-test-relay")
+    clear_provider_cache()
+    provider = get_image_provider()
+    assert provider.name == "openai"
+    assert isinstance(provider, OpenAIImageProvider)
+
+
+def test_factory_requires_api_key_for_openai(monkeypatch):
+    """选了 openai provider 却没配 Key：建实例时立刻失败。"""
+    settings = get_settings()
+    monkeypatch.setattr(settings, "image_provider", "openai")
+    monkeypatch.setattr(settings, "image_api_key", None)
+    monkeypatch.setattr(settings, "dashscope_api_key", None)
+    clear_provider_cache()
+    with pytest.raises(RuntimeError, match="IMAGE_API_KEY"):
         get_image_provider()
 
 
@@ -310,3 +332,121 @@ async def test_dashscope_n_greater_than_one_creates_parallel_tasks():
 
     assert len(images) == 2
     assert sum(1 for r in calls if r.method == "POST") == 2
+
+
+# ------------------------------------------------------------------ OpenAI 中转站
+
+
+def _make_openai_provider(
+    calls: list[httpx.Request],
+    routes: dict[tuple[str, str], httpx.Response | Any],
+) -> OpenAIImageProvider:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        key = (request.method, request.url.path)
+        responder = routes.get(key)
+        if responder is None:
+            raise AssertionError(f"未 mock 的请求：{key}（url={request.url}）")
+        if callable(responder):
+            return responder(request)
+        return responder
+
+    return OpenAIImageProvider(
+        api_key="sk-test",
+        text_model="gpt-image-2",
+        edit_model="gpt-image-2",
+        base_url="https://api.monkeycoding.club/v1",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_openai_provider_satisfies_protocol():
+    provider = OpenAIImageProvider(
+        api_key="sk-test",
+        text_model="gpt-image-2",
+        edit_model="gpt-image-2",
+    )
+    assert isinstance(provider, ImageProvider)
+
+
+async def test_openai_text_to_image_returns_png_from_b64_json():
+    calls: list[httpx.Request] = []
+    png = _png_bytes()
+    b64 = base64.b64encode(png).decode()
+
+    provider = _make_openai_provider(
+        calls,
+        {
+            ("POST", "/v1/images/generations"): httpx.Response(
+                200,
+                json={"data": [{"b64_json": b64}]},
+            )
+        },
+    )
+
+    images = await provider.text_to_image("夕阳下的山间湖泊", size="1024x1024")
+    assert images == [png]
+    assert len(calls) == 1
+    req = calls[0]
+    assert req.headers["Authorization"] == "Bearer sk-test"
+    body = json.loads(req.content)
+    assert body["model"] == "gpt-image-2"
+    assert body["prompt"] == "夕阳下的山间湖泊"
+    assert body["size"] == "1024x1024"
+
+
+async def test_openai_text_to_image_downloads_url_fallback():
+    calls: list[httpx.Request] = []
+    png = _png_bytes()
+
+    provider = _make_openai_provider(
+        calls,
+        {
+            ("POST", "/v1/images/generations"): httpx.Response(
+                200,
+                json={"data": [{"url": "https://api.monkeycoding.club/v1/files/img1.png"}]},
+            ),
+            ("GET", "/v1/files/img1.png"): httpx.Response(200, content=png),
+        },
+    )
+
+    images = await provider.text_to_image("测试 URL 下载")
+    assert images == [png]
+
+
+async def test_openai_text_to_image_n_parallel():
+    calls: list[httpx.Request] = []
+    png = _png_bytes()
+    b64 = base64.b64encode(png).decode()
+
+    provider = _make_openai_provider(
+        calls,
+        {
+            ("POST", "/v1/images/generations"): lambda r: httpx.Response(
+                200, json={"data": [{"b64_json": b64}]}
+            )
+        },
+    )
+
+    images = await provider.text_to_image("多图", n=3)
+    assert len(images) == 3
+    assert len(calls) == 3
+
+
+async def test_openai_text_to_image_translates_http_error():
+    calls: list[httpx.Request] = []
+    provider = _make_openai_provider(
+        calls,
+        {
+            ("POST", "/v1/images/generations"): httpx.Response(
+                401,
+                json={"error": {"message": "Invalid API Key"}},
+            )
+        },
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        await provider.text_to_image("x")
+
+    assert exc_info.value.code == "http_error"
+    assert "Invalid API Key" in str(exc_info.value)
