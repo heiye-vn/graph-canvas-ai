@@ -11,9 +11,11 @@ src/
 ├── hooks/       useRunStream（SSE 流 → 组件状态）/ useCreateSession（开会话的统一入口）
 ├── lib/         brand / marketing（文案集中）/ antdTheme（组件库主题）
 ├── components/  通用件：BrandMark / PageHeader / AssetCard / RunProgress / ProtectedRoute
-│                editor/：画布专属件（CanvasStage / LayerPanel / useLoadedImages）
-│                         ToolPanel（元数据驱动表单）/ AgentBar（一句话改图）/
-│                         HistoryBar（撤销 / 重做）/ adjustedSource（离屏调色）
+│                editor/：编辑器专属件，三栏外壳各归其位 ——
+│                         ChatPanel（左：对话）/ QuickToolbar（顶：快捷工具）/
+│                         CanvasStage + CandidateStrip（中：画布 + 候选图条）/
+│                         LayerPanel + TransformPanel + ToolPanel + HistoryPanel（右）/
+│                         adjustedSource（离屏调色）
 │                landing/：落地页专属组件（Hero / PromptComposer / Showcase / Steps / CTA）
 ├── stores/      Zustand：canvasView / editorUi / agentRun / toasts
 └── pages/       Landing（公开）/ Assets / Create / Candidates / Editor（索引 + 详情）
@@ -33,7 +35,7 @@ src/
 | `/candidates/:runId` | CandidatesPage | 候选图，**可刷新、可分享** |
 | `/assets` | AssetsPage | 素材库（全量列表 + 删除 + 编辑入口） |
 | `/editor` | EditorIndexPage | 会话入口列表 |
-| `/editor/:sessionId` | EditorPage | Konva 画布 + 图层面板（**按需加载**：konva 约 100KB gzip） |
+| `/editor/:sessionId` | EditorPage | **三栏编辑器外壳**（M5.5）：左对话 / 中画布+候选图条 / 右面板（**按需加载**：konva 约 100KB gzip） |
 
 `/login` 之外的工作台页面全部包在 `ProtectedRoute` → `WorkbenchLayout` 两层布局路由里，
 页面只写内容区。
@@ -92,6 +94,25 @@ esbuild 的 postinstall 会 `spawnSync node esbuild --version` 做二进制校�
 这两个原生包本来就是靠 optionalDependencies 提供的，postinstall 只是校验，跳过即可。
 若已经装坏了，正确修法是 **整个 `node_modules` 删掉重装**，不要逐个 `--no-save` 补
 （下次 `npm install` 会把它们当成多余包清掉）。
+
+## 编辑器外壳（M5.5）
+
+参考画布类产品的通行形态：**对话即工作区**。布局对齐「左对话 / 中画布 / 右面板」，
+但有一条自己的分工原则 —— **入口可以多，表单只有一份**：
+
+- 顶栏快捷工具条只做**入口**（按 `/api/tools` 的 group 分组平铺），
+  点击后右侧 ToolPanel 显示该工具的参数表单。每个按钮各弹一个表单的话，
+  两份表单迟早对不上。
+- 变换面板的滑杆**直接绑具体工具名**（`set_opacity` / `rotate_layer` / `reorder_layer`），
+  这是「表单不硬编码」规矩的**刻意例外**：用户拖的是「透明度」这个概念，
+  不是「某个名字的工具」。概念到工具的映射集中在 TransformPanel 一处。
+- 滑杆拖动过程**不发请求**，松手（`onChangeComplete`）才提交 ——
+  拖一次 0→100 会触发几十个中间值，每次都落一条历史等于把撤销栈灌满废水。
+- **视图状态（缩放 / 选中图层 / 对话内容）不进文档**：放大镜和选中框不该产生
+  撤销记录；选中图层被删后回落到「当前图」，否则面板整体失灵。
+- 对话记录只存组件状态：Agent 执行记录的持久化是 M8 的事，现在落库只会存出
+  一堆没有上下文的单轮记录。画布状态本身是持久的，损失的只是聊天记录。
+- 导出 = Konva `stage.toDataURL()`，所见即所得（含调色/裁剪/翻转后的效果）。
 
 ## UI 组件库：antd 6
 

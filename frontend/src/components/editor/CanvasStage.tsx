@@ -5,8 +5,11 @@
  * 也不持有文档之外的状态 —— 文档是唯一真相源，画布只是它的一个投影。
  * 好处是「画布上显示的」和「工具实际改的」永远是一份东西。
  *
- * 缩放只用一个 scale：Stage 尺寸 = 画布尺寸 × scale，坐标仍是文档里的画布像素。
+ * 缩放只有一个 scale：Stage 尺寸 = 画布尺寸 × scale，坐标仍是文档里的画布像素。
  * 这样以后加节点变换/选区时不用做「屏幕坐标 ⇄ 文档坐标」的第二套换算。
+ *
+ * M5.5 起支持两种缩放：`fit`（贴齐容器宽，默认）与固定倍率。
+ * 画布缩放是**视图状态**，不是文档状态 —— 放大镜不该进撤销栈。
  *
  * M5 起这里把文档里此前**只读不画**的字段补上了：`adjustments`（调色）、
  * `crop`（裁剪）、`transform.flip_x/flip_y`（翻转）。工具能改但画布不渲染，
@@ -15,6 +18,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type Konva from 'konva'
+import type { MutableRefObject } from 'react'
 import { Image as KonvaImage, Layer as KonvaLayer, Rect, Stage } from 'react-konva'
 
 import type { LayerCanvas, LayerDocument, Layer as LayerModel } from '@/domain/layerDoc'
@@ -25,7 +29,7 @@ import type { ImageMap } from './useLoadedImages'
 /**
  * 单个图层。
  *
- * 抽成组件而不是内联 map 出去：每个图层需要自己的 useMemo（按 own 的
+ * 抽成组件而不是内联 map 出去：每个图层需要自己的 useMemo（按自己的
  * adjustments 缓存离屏 canvas），Hook 不能写在循环里。
  */
 function LayerNode({
@@ -71,10 +75,19 @@ export default function CanvasStage({
   doc,
   images,
   loading = false,
+  zoom = null,
+  stageRef,
+  onScaleChange,
 }: {
   doc: LayerDocument
   images: ImageMap
   loading?: boolean
+  /** null = 贴齐容器宽；数字 = 固定倍率（1 = 100%） */
+  zoom?: number | null
+  /** 导出要用 Stage 本体；由父级持有（视图状态不进文档） */
+  stageRef?: MutableRefObject<Konva.Stage | null>
+  /** 实际生效的倍率回传给顶栏显示（fit 时的倍率只有这里算得出来） */
+  onScaleChange?: (scale: number) => void
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const [boxWidth, setBoxWidth] = useState(0)
@@ -91,20 +104,32 @@ export default function CanvasStage({
   }, [])
 
   const { width: canvasWidth, height: canvasHeight } = doc.canvas
-  const scale = useMemo(() => {
+  const fitScale = useMemo(() => {
     if (!boxWidth || !canvasWidth) return 0
     return Math.min(boxWidth / canvasWidth, 1) // 小图不放大到糊
   }, [boxWidth, canvasWidth])
+  const scale = zoom ?? fitScale
+
+  useEffect(() => {
+    if (scale > 0) onScaleChange?.(scale)
+  }, [scale, onScaleChange])
 
   // layers 数组从下到上，直接顺序渲染即可（不需要翻转 —— 翻转是为了给面板看）
   const drawable = doc.layers.filter((layer) => layer.visible)
 
   return (
-    <div ref={boxRef} className="relative w-full">
+    // 放大后要能拖动滚动条看细节，容器自身交给外层布局滚
+    <div ref={boxRef} className="relative w-full overflow-auto">
       {scale === 0 ? (
         <div className="bg-soft rounded-card h-64 w-full animate-pulse" />
       ) : (
-        <Stage width={canvasWidth * scale} height={canvasHeight * scale} scaleX={scale} scaleY={scale}>
+        <Stage
+          ref={stageRef}
+          width={canvasWidth * scale}
+          height={canvasHeight * scale}
+          scaleX={scale}
+          scaleY={scale}
+        >
           <KonvaLayer listening={false}>
             {doc.canvas.background && (
               <Rect x={0} y={0} width={canvasWidth} height={canvasHeight} fill={doc.canvas.background} />

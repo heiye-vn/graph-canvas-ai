@@ -15,12 +15,24 @@ import { ThunderboltOutlined } from '@ant-design/icons'
 import { invokeTool, listTools } from '@/api/tools'
 import type { ToolParamMeta } from '@/api/tools'
 
-export default function ToolPanel({ sessionId }: { sessionId: string }) {
+export default function ToolPanel({
+  sessionId,
+  selected = null,
+  onSelect,
+}: {
+  sessionId: string
+  /** 外部（快捷工具条）选中的工具；不传则用面板自己的下拉 */
+  selected?: string | null
+  onSelect?: (name: string) => void
+}) {
   const queryClient = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['tools'], queryFn: listTools })
 
-  const [toolName, setToolName] = useState<string | null>(null)
+  const [localName, setLocalName] = useState<string | null>(null)
   const [values, setValues] = useState<Record<string, unknown>>({})
+
+  // 受控优先：快捷工具条点了谁，这里就显示谁的表单
+  const toolName = selected ?? localName
 
   const tool = useMemo(
     () => data?.items.find((item) => item.name === toolName) ?? null,
@@ -45,8 +57,9 @@ export default function ToolPanel({ sessionId }: { sessionId: string }) {
         placeholder="选择一个工具"
         value={toolName}
         onChange={(value) => {
-          setToolName(value)
+          setLocalName(value)
           setValues({})
+          onSelect?.(value)
         }}
         options={data.items.map((item) => ({
           value: item.name,

@@ -28,11 +28,16 @@ export default function LayerPanel({
   doc,
   onToggleVisible,
   onSwitchCurrent,
+  onSelect,
+  selectedId,
   busy = false,
 }: {
   doc: LayerDocument
   onToggleVisible: (layerId: string, visible: boolean) => void
   onSwitchCurrent: (layerId: string) => void
+  /** 点图层行 = 选中（变换面板的滑杆作用对象），不产生任何文档改动 */
+  onSelect?: (layerId: string) => void
+  selectedId?: string | null
   /** 有请求在飞：禁用按钮，避免同一步连点两次而多出一条历史 */
   busy?: boolean
 }) {
@@ -43,9 +48,13 @@ export default function LayerPanel({
       locale={{ emptyText: '这个会话还没有图层' }}
       renderItem={(layer) => {
         const active = layer.id === doc.active_layer_id
+        const selected = layer.id === selectedId
         return (
           <List.Item
-            className={`rounded-control transition-colors ${active ? 'bg-brand-soft' : ''}`}
+            className={`rounded-control cursor-pointer transition-colors ${
+              selected ? 'bg-brand-soft/60 ring-brand ring-1' : active ? 'bg-brand-soft' : ''
+            }`}
+            onClick={() => onSelect?.(layer.id)}
             actions={[
               <Tooltip key="visible" title={layer.visible ? '隐藏' : '显示'}>
                 <Button
