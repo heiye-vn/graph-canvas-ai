@@ -1,8 +1,15 @@
 @import 'tailwindcss';
 
 @theme {
+  /*
+   * 中文字体栈的顺序是排版质量的根：system-ui 在 Windows 上对中文的回退
+   * 不可控（会落到浏览器默认 serif 的渲染路径），必须把 CJK 字体显式列出来。
+   * Latin 先行（Segoe UI / SF），中文紧随其后，sans-serif 兜底。
+   */
   --font-sans:
-    system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei',
+    'Noto Sans SC', sans-serif;
 
   --color-ink: #171917;
   --color-muted: #6f746f;
@@ -48,5 +55,24 @@
 
   :focus-visible {
     @apply outline-brand outline-2 outline-offset-2;
+  }
+
+  /*
+   * 细滚动条：工具型 UI 的面板滚动条用系统默认的又宽又灰，
+   * 是「界面显得糙」的第二大来源（第一是字体）。
+   */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border-radius: 8px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #c3c8c2;
   }
 }

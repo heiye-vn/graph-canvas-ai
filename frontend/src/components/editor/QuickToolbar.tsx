@@ -3,17 +3,22 @@
  *
  * 与 ToolPanel 的分工：这里是**入口**（点一下选中该工具），
  * 参数表单仍然只有一份（右侧 ToolPanel），自动跟着选中项切换。
- * 「入口平铺 + 表单单份」而不是「每个按钮各弹一个表单」，
- * 是因为两份表单迟早会对不上。
  *
- * 工具清单依旧**全部来自 /api/tools**：这里只决定「怎么摆」
- （按 group 分组、分组间用竖线隔开），不决定「有哪些」。
+ * 16 个工具全平铺会把顶栏挤成两行（上一版截图的问题），
+ * 所以规则是：**注册表前 8 个平铺，其余收进「更多」下拉**（按 group 分组展示）。
+ * 这个 8 是展示策略不是工具身份，增删工具仍然不用改前端。
+ *
+ * 刻意不放分组文字标签：分组信息挪进下拉的 group 标题和按钮 tooltip，
+ * 顶栏每个像素都要为「可点的工具」服务。
  */
 
 import { useMemo } from 'react'
-import { Button, Tooltip } from 'antd'
+import { Button, Dropdown, Tooltip } from 'antd'
+import { DownOutlined } from '@ant-design/icons'
 
 import type { ToolMeta } from '@/api/tools'
+
+const FLAT_LIMIT = 8
 
 export default function QuickToolbar({
   tools,
@@ -24,26 +29,40 @@ export default function QuickToolbar({
   selected: string | null
   onSelect: (name: string) => void
 }) {
-  const groups = useMemo(() => {
-    const map = new Map<string, ToolMeta[]>()
-    for (const tool of tools) {
-      const list = map.get(tool.group) ?? []
+  // 注册顺序即展示顺序：builtins 里相邻注册的工具天然同组
+  const flat = useMemo(() => tools.slice(0, FLAT_LIMIT), [tools])
+  const rest = useMemo(() => tools.slice(FLAT_LIMIT), [tools])
+
+  const moreMenu = useMemo(() => {
+    const groups = new Map<string, ToolMeta[]>()
+    for (const tool of rest) {
+      const list = groups.get(tool.group) ?? []
       list.push(tool)
-      map.set(tool.group, list)
+      groups.set(tool.group, list)
     }
-    return [...map.entries()]
-  }, [tools])
+    return {
+      items: [...groups.entries()].map(([group, items]) => ({
+        type: 'group' as const,
+        label: group,
+        children: items.map((tool) => ({ key: tool.name, label: tool.label })),
+      })),
+      onClick: ({ key }: { key: string }) => onSelect(key),
+    }
+  }, [rest, onSelect])
 
   if (tools.length === 0) return null
 
+  let previousGroup: string | null = null
+
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1">
-      {groups.map(([group, items], groupIndex) => (
-        <div key={group} className="flex items-center gap-1">
-          {groupIndex > 0 && <span className="border-line mx-1 h-4 border-l" aria-hidden />}
-          <span className="text-faint px-0.5 text-[11px]">{group}</span>
-          {items.map((tool) => (
-            <Tooltip key={tool.name} title={tool.description}>
+    <div className="flex flex-nowrap items-center gap-0.5">
+      {flat.map((tool) => {
+        const divider = previousGroup !== null && tool.group !== previousGroup
+        previousGroup = tool.group
+        return (
+          <div key={tool.name} className="flex shrink-0 items-center gap-0.5">
+            {divider && <span className="bg-line mx-1 h-4 w-px" aria-hidden />}
+            <Tooltip title={tool.description}>
               <Button
                 size="small"
                 type={selected === tool.name ? 'primary' : 'text'}
@@ -52,9 +71,17 @@ export default function QuickToolbar({
                 {tool.label}
               </Button>
             </Tooltip>
-          ))}
-        </div>
-      ))}
+          </div>
+        )
+      })}
+
+      {rest.length > 0 && (
+        <Dropdown menu={moreMenu} trigger={['click']} placement="bottomRight">
+          <Button size="small" type="text" icon={<DownOutlined />}>
+            更多
+          </Button>
+        </Dropdown>
+      )}
     </div>
   )
 }

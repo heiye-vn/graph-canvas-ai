@@ -29,7 +29,10 @@ export const antdTheme: ThemeConfig = {
     borderRadius: 12, // radius-control
     // large 尺寸给到 48：登录表单用它，和原来手写的 py-3.5 大致一个节奏
     controlHeightLG: 48,
-    fontFamily: "system-ui, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif",
+    // 与 index.css 的 --font-sans 完全一致（改一处必须同步另一处）：
+    // Windows 上 system-ui 的中文回退不可控，CJK 字体要显式列出来
+    fontFamily:
+      "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans SC', sans-serif",
   },
   components: {
     Button: {

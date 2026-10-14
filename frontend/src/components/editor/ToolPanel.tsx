@@ -10,7 +10,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Empty, Input, InputNumber, Select, Switch, Tooltip } from 'antd'
-import { ThunderboltOutlined } from '@ant-design/icons'
+import { LockOutlined, ThunderboltOutlined } from '@ant-design/icons'
 
 import { invokeTool, listTools } from '@/api/tools'
 import type { ToolParamMeta } from '@/api/tools'
@@ -119,7 +119,8 @@ function ParamField({
         {param.required && <span className="text-danger">*</span>}
         {param.agent_hidden && (
           <Tooltip title="这个字段不会出现在给模型的 schema 里，避免模型编造 id">
-            <span className="text-faint">🔒</span>
+            {/* 图标一律走图标库：emoji 当图标在跨平台渲染里高度和基线都不可控 */}
+            <LockOutlined className="text-faint" />
           </Tooltip>
         )}
       </span>

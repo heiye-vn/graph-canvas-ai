@@ -125,6 +125,9 @@ esbuild 的 postinstall 会 `spawnSync node esbuild --version` 做二进制校�
 
 1. **主题只有一处真源**：`src/index.css` 的 Tailwind token 与 `src/lib/antdTheme.ts`
    的 antd token 必须一一对应。改动时两处同步，否则 antd 组件和手写部分一眼两套系统。
+   **字体栈也在这个约束里**：`--font-sans` 与 antd `token.fontFamily` 必须逐字一致，
+   且 CJK 字体要显式列出 —— Windows 上 `system-ui` 对中文的回退不可控，
+   会落到衬线渲染路径，这是「字体看着很丑」的常见根因。
 2. **主色只允许一个例外**。`colorPrimary` 的语义是「整页最该点的那一下」，
    页面上出现第二个主色层级就崩了。确需例外时（登录页深色提交按钮、
    落地页深色区块上的强调色 CTA）用**局部 `ConfigProvider` 只包住那一个按钮**，
