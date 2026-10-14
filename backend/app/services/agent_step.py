@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import uuid
 
+from fastapi import HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,12 +49,17 @@ async def run_step(
 ) -> StepOutcome:
     # 延迟导入：langchain 只在这一条链路上需要，不该因为没装 agent extra
     # 就让整个应用起不来（其余功能与模型无关）
-    from app.agent.llm import plan_tool_calls
+    from app.agent.llm import PlannerError, plan_tool_calls
 
     edit_session = await sessions_service.get_edit_session(session, user_id, session_id)
     doc = LayerDocument.model_validate(edit_session.doc)
 
-    calls = await plan_tool_calls(instruction, tool_exec.summarize_doc(doc), function_schemas())
+    # 规划模型挂了要报人话（502 + 原因），不能落进 FastAPI 兜底的 500 ——
+    # 前端只会显示「请求失败（500）」，用户根本不知道是配置还是网络的问题
+    try:
+        calls = await plan_tool_calls(instruction, tool_exec.summarize_doc(doc), function_schemas())
+    except PlannerError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     if not calls:
         out = await sessions_service.to_out(session, edit_session)
         return StepOutcome(

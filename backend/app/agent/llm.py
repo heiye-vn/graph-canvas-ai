@@ -28,6 +28,40 @@ SYSTEM_PROMPT = """你是图像编辑工作台里的执行助手。
 """
 
 
+class PlannerError(RuntimeError):
+    """规划模型调用失败（配置错 / 网络不通 / 服务端拒绝）。
+
+    message 面向用户可直接展示 —— 404 里最常见的坑是 base_url 填成
+    原生 API 前缀（/api/v1）而不是兼容模式（/compatible-mode/v1），
+    或者模型名不在兼容模式清单里；报错必须把这两层都说破，
+    否则前端只剩一个含糊的 500，用户根本无从下手。
+    """
+
+
+def _describe_llm_error(exc: Exception, *, model: str, base_url: str) -> str:
+    """把 openai SDK 的异常翻成能指导排错的一句话（langchain 只包了一层皮）。"""
+    import openai
+
+    if isinstance(exc, openai.AuthenticationError):
+        return "规划模型鉴权失败（401）：DASHSCOPE_API_KEY 无效或已过期。"
+    if isinstance(exc, openai.NotFoundError):
+        return (
+            f"规划模型不存在（404）：model={model} @ {base_url}。"
+            "用百炼时端点必须是 OpenAI 兼容模式 /compatible-mode/v1"
+            "（/api/v1 是原生 API 前缀，拼 /chat/completions 必然 404），"
+            "模型名也要用兼容模式支持的（如 qwen-plus / qwen-max）。"
+        )
+    if isinstance(exc, openai.RateLimitError):
+        return "规划模型触发限流（429）：稍后重试，或降低调用频率。"
+    if isinstance(exc, openai.APITimeoutError):
+        return f"规划模型请求超时：{exc}"
+    if isinstance(exc, openai.APIConnectionError):
+        return f"规划模型网络不通：{exc}"
+    if isinstance(exc, openai.APIStatusError):
+        return f"规划模型调用失败（HTTP {exc.status_code}）：{exc.message}"
+    return f"规划模型调用失败：{exc}"
+
+
 def get_chat_model() -> ChatOpenAI:
     base_url, api_key, model = get_settings().require_llm_config()
     return ChatOpenAI(
@@ -48,13 +82,22 @@ async def plan_tool_calls(
     返回 `[{name, args}]`。模型没调用任何工具时返回空列表 ——
     这是正常情况（比如用户说的是一句闲聊），由上层决定怎么回应用户。
     """
+    try:
+        base_url, _api_key, model = get_settings().require_llm_config()
+    except RuntimeError as exc:
+        # 缺 Key 也是「规划不了」的一种：同样给人话，而不是落进 500
+        raise PlannerError(str(exc)) from exc
+
     llm = get_chat_model().bind_tools(functions)
-    message = await llm.ainvoke(
-        [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"{doc_summary}\n\n用户要求：{instruction}"),
-        ]
-    )
+    try:
+        message = await llm.ainvoke(
+            [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=f"{doc_summary}\n\n用户要求：{instruction}"),
+            ]
+        )
+    except Exception as exc:
+        raise PlannerError(_describe_llm_error(exc, model=model, base_url=base_url)) from exc
 
     calls = []
     for call in getattr(message, "tool_calls", []) or []:

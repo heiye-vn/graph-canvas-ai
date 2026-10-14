@@ -150,9 +150,9 @@ def test_hidden_field_is_not_offered_to_the_model(monkeypatch, client: TestClien
     session = make_session(client, user)
     step(client, user, session["id"], "把图变亮一点")
 
-    add = next(
-        f for f in seen["functions"] if f["function"]["name"] == "add_image_layer"
-    )["function"]
+    add = next(f for f in seen["functions"] if f["function"]["name"] == "add_image_layer")[
+        "function"
+    ]
     assert "asset_id" not in add["parameters"]["properties"]
 
 
@@ -217,3 +217,64 @@ def test_step_requires_auth(client: TestClient):
         json={"session_id": str(uuid.uuid4()), "instruction": "把图变亮"},
     )
     assert r.status_code == 401
+
+
+# ------------------------------------------------------------------ 规划失败要报人话
+
+
+def test_planner_failure_returns_502_with_reason(monkeypatch, client: TestClient, user: dict):
+    """模型挂了不能落成含糊的 500：要把「哪一层挂了、怎么修」说破。"""
+    session = make_session(client, user)
+
+    def fake_plan(instruction, doc_summary, functions):
+        raise llm_module.PlannerError(
+            "规划模型不存在（404）：model=demo @ https://x.example/v1。请检查端点与模型名。"
+        )
+
+    monkeypatch.setattr(llm_module, "plan_tool_calls", fake_plan)
+
+    r = step(client, user, session["id"], "把图变亮一点")
+
+    assert r.status_code == 502, r.text
+    assert "404" in r.json()["detail"]
+
+
+def _openai_status_error(cls, status: int):
+    """构造真实的 openai 异常实例（这些类要求挂一个 httpx.Response）。"""
+    import httpx
+
+    request = httpx.Request("POST", "https://llm.example/v1/chat/completions")
+    return cls("boom", response=httpx.Response(status, request=request), body=None)
+
+
+def test_describe_404_points_at_compatible_mode():
+    """404 最常见的坑：端点用了原生 /api/v1、模型名不在兼容模式清单。"""
+    import openai
+
+    text = llm_module._describe_llm_error(
+        _openai_status_error(openai.NotFoundError, 404),
+        model="deepseek-v4-flash-0731",
+        base_url="https://dashscope.aliyuncs.com/api/v1",
+    )
+    assert "compatible-mode" in text
+    assert "deepseek-v4-flash-0731" in text
+
+
+def test_describe_401_mentions_api_key():
+    import openai
+
+    text = llm_module._describe_llm_error(
+        _openai_status_error(openai.AuthenticationError, 401),
+        model="qwen-plus",
+        base_url="https://x.example/v1",
+    )
+    assert "DASHSCOPE_API_KEY" in text
+
+
+def test_describe_connection_error_is_plain():
+    import httpx
+    import openai
+
+    exc = openai.APIConnectionError(request=httpx.Request("POST", "https://x.example/v1"))
+    text = llm_module._describe_llm_error(exc, model="qwen-plus", base_url="https://x.example/v1")
+    assert "网络不通" in text
