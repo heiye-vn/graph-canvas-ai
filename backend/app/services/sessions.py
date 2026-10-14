@@ -88,6 +88,7 @@ async def to_out(session: AsyncSession, edit_session: EditSession) -> SessionOut
         id=edit_session.id,
         title=edit_session.title,
         doc=doc,
+        revision=edit_session.revision,
         assets=[asset_service.asset_to_out(asset) for asset in found],
         created_at=edit_session.created_at,
         updated_at=edit_session.updated_at,
@@ -209,6 +210,8 @@ async def replace_doc(
     """
     edit_session = await get_edit_session(session, user_id, session_id)
     edit_session.doc = doc.model_dump(mode="json")
+    # 整份替换同样改变像素 → 选区作废（revision 裁判覆盖所有改文档的路径）
+    edit_session.revision += 1
     await session.commit()
     await session.refresh(edit_session)
     return edit_session

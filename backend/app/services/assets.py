@@ -196,3 +196,32 @@ async def delete_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid
         storage.delete_object(asset.s3_key)
     except Exception:  # noqa: BLE001 - 记录已删，对象清理失败不影响主流程，交给后台清理
         pass
+
+
+async def create_from_bytes(
+    session: AsyncSession, user_id: uuid.UUID, data: bytes, *, kind: str = "image"
+) -> Asset:
+    """把一段图片字节落成素材记录（不入对象存储之外的地方）。
+
+    选区遮罩、局部编辑结果这类**服务端产出**共用这一个入口 ——
+    与 tasks/image.py 里手写的那份组装逻辑同构；那处是任务语境，这里是通用语境，
+    两处将来该收敛到这一份。
+
+    flush 是契约的一部分：调用方马上要拿 `asset.id` 组装下游结构
+    （选区 payload、ResultEvent），等外层 commit 再拿就晚了。
+    """
+    mime, width, height = probe_image(data)
+    key = build_key(user_id, mime)
+    storage.put_object(key, data, content_type=mime)
+    asset = Asset(
+        user_id=user_id,
+        kind=kind,
+        s3_key=key,
+        mime=mime,
+        width=width,
+        height=height,
+        size=len(data),
+    )
+    session.add(asset)
+    await session.flush()
+    return asset

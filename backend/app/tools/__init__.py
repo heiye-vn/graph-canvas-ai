@@ -5,4 +5,7 @@
 表现是 `/api/tools` 偶发返回空列表，而且只在特定启动路径下复现。
 """
 
-from app.tools import builtins  # noqa: F401  导入即注册
+from app.tools import (
+    builtins,  # noqa: F401  导入即注册
+    region,  # noqa: F401  M6 局部编辑（排队型工具）
+)

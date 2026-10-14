@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
@@ -23,12 +23,16 @@ from app.schemas.session import (
     AddSessionAssetsRequest,
     CreateSessionRequest,
     ReplaceDocRequest,
+    SelectIn,
+    SelectionOut,
     SessionOut,
     SessionSummary,
     UpdateSessionRequest,
 )
 from app.services import history as history_service
+from app.services import selections as selections_service
 from app.services import sessions as sessions_service
+from app.services.selections import EmptySelection, StaleSelection
 
 router = APIRouter(prefix="/edit-sessions", tags=["edit-sessions"])
 
@@ -218,3 +222,83 @@ async def delete_session(
     session: AsyncSession = Depends(get_session),
 ) -> None:
     await sessions_service.delete_session(session, user_id=user.id, session_id=session_id)
+
+
+# ------------------------------------------------------------------ 选区（M6）
+
+
+async def _selection_out(
+    session: AsyncSession, user: User, payload: dict
+) -> SelectionOut:
+    asset = await sessions_service.asset_service.get_asset(
+        session, user.id, uuid.UUID(payload["mask_asset_id"])
+    )
+    return SelectionOut(
+        revision=payload["revision"],
+        mask=sessions_service.asset_service.asset_to_out(asset),
+        markers=payload.get("markers") or [],
+    )
+
+
+@router.post("/{session_id}/selection", response_model=SelectionOut)
+async def create_selection(
+    session_id: uuid.UUID,
+    payload: SelectIn,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SelectionOut:
+    """点选 / 笔刷生成选区。
+
+    revision 不一致返回 **409**：画布在用户操作期间变过，选区请求是旧的 ——
+    这不是参数错误，前端应当丢掉本地笔迹重新让用户选。
+    """
+    record = await sessions_service.get_edit_session(session, user.id, session_id)
+    try:
+        if payload.points:
+            stored = await selections_service.select_points(
+                session,
+                record,
+                payload.revision,
+                [(point.x, point.y) for point in payload.points],
+                append=payload.append,
+            )
+        elif payload.strokes:
+            stored = await selections_service.select_strokes(
+                session,
+                record,
+                payload.revision,
+                [[(point.x, point.y) for point in stroke] for stroke in payload.strokes],
+                payload.radius,
+            )
+        else:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "请点选或涂抹选区")
+    except StaleSelection as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "画布已更新，请重新选择") from exc
+    except EmptySelection as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "选区为空") from exc
+    await session.commit()
+    return await _selection_out(session, user, stored)
+
+
+@router.get("/{session_id}/selection", response_model=SelectionOut | None)
+async def get_selection(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> SelectionOut | None:
+    """恢复现场：选区在 Redis 里，revision 对不上时返回 None（不是 404）。"""
+    record = await sessions_service.get_edit_session(session, user.id, session_id)
+    stored = await selections_service.get(record.id, record.revision)
+    if stored is None:
+        return None
+    return await _selection_out(session, user, stored)
+
+
+@router.delete("/{session_id}/selection", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_selection(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    record = await sessions_service.get_edit_session(session, user.id, session_id)
+    await selections_service.clear(record.id)

@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     image_edit_model: str = "qwen-image-3.0"
     planner_model: str = "qwen-plus"
 
+    # ---- 选区分割（M6）----
+    # sam：rembg 的 SAM 模型（首次点击算 embedding，后续只跑 decoder，需要 cv extra）
+    # circle：纯 Pillow 画圆，零依赖兜底
+    # auto：先试 SAM，任何异常降级画圆 —— 演示环境不为可选依赖崩掉
+    matting_provider: Literal["auto", "sam", "circle"] = "auto"
+
     # ---- Agent（M4）----
     # OpenAI 兼容端点；国内网络默认走百炼的兼容模式，换自建/其它厂商只改这一个变量
     llm_base_url: str | None = None
@@ -115,7 +121,7 @@ class Settings(BaseSettings):
         return self.dashscope_api_key
 
     def require_image_api_key(self) -> str:
-        """中转站生图链路真正要用 Key 时才校验。优先用 IMAGE_API_KEY，缺省时 fallback 到 DASHSCOPE_API_KEY。"""
+        """中转站生图链路要用 Key 时才校验。优先 IMAGE_API_KEY，缺省回退 DASHSCOPE_API_KEY。"""
         key = self.image_api_key or self.dashscope_api_key
         if not key:
             raise RuntimeError(

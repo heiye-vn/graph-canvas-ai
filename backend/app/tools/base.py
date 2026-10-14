@@ -47,12 +47,16 @@ class ToolContext:
 
     `pinned` 是服务端回填的内部参数（asset_id、revision…）。
     工具自己不查库、不猜，只从这里拿 —— 也顺便保证了「模型给的值」不会被当真。
+
+    `db` 只有排队型工具（重像素，走 ARQ）用得着：它们要在提交路径里
+    创建 ToolRun 记录。确定性工具保持「只改文档」的纯粹，不碰库。
     """
 
     session_id: uuid.UUID
     user_id: uuid.UUID
     doc: LayerDocument
     pinned: dict[str, Any] = field(default_factory=dict)
+    db: Any | None = None
 
 
 @dataclass
@@ -61,15 +65,30 @@ class ToolResult:
     message: str
 
 
+@dataclass
+class QueuedOutcome:
+    """排队型工具的提交结果：run 已落库（由调用方在事务提交后投递 ARQ）。
+
+    排队型工具**不改文档** —— 生成结果走「只上墙」通道（ResultEvent →
+    前端采用为图层），画布的变更留在采用那一刻，撤销栈因此天然干净。
+    """
+
+    run_id: uuid.UUID
+    message: str
+    task: str = "inpaint_region"
+
+
 @dataclass(frozen=True)
 class ToolSpec:
     name: str
     label: str
     description: str
     params_model: type[BaseModel]
-    handler: Callable[[Any, ToolContext], Awaitable[ToolResult]]
+    handler: Callable[[Any, ToolContext], Awaitable[Any]]
     group: str = "编辑"
     undoable: bool = True
+    """True = 重像素工具：提交时创建 ToolRun 走 ARQ，handler 返回 QueuedOutcome。"""
+    queued: bool = False
 
     def parse(self, raw: dict[str, Any], ctx: ToolContext) -> BaseModel:
         """校验参数。

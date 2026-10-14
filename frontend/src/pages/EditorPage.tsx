@@ -12,13 +12,17 @@
  *   4. **改动一律用服务端返回的 session 覆盖缓存** —— 新图层 id、服务端补的
  *      默认值都在那份响应里，本地推导迟早漏点什么
  *   5. **视图状态（缩放 / 选中图层）不进文档** —— 放大镜和选中框不该产生撤销记录
+ *
+ * M6 加入选区：模式（点选/笔刷）、笔刷半径、当前 run 都是**视图状态**，
+ * 与缩放同级 —— 选区 overlay 不进文档，改图后随 revision 自动失效。
  */
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Result, Skeleton, Tooltip } from 'antd'
+import { Alert, Button, Popover, Result, Segmented, Skeleton, Slider, Tooltip } from 'antd'
 import {
+  ClearOutlined,
   ColumnWidthOutlined,
   ExportOutlined,
   MinusOutlined,
@@ -26,24 +30,38 @@ import {
 } from '@ant-design/icons'
 import type Konva from 'konva'
 
-import { getSession } from '@/api/sessions'
+import {
+  clearSelection,
+  createSelection,
+  getSession,
+  getSelection,
+} from '@/api/sessions'
 import type { SessionOut } from '@/api/sessions'
 import { invokeTool, listTools } from '@/api/tools'
 import CandidateStrip from '@/components/editor/CandidateStrip'
 import CanvasStage from '@/components/editor/CanvasStage'
+import type { SelectionMode } from '@/components/editor/CanvasStage'
 import ChatPanel from '@/components/editor/ChatPanel'
 import HistoryPanel from '@/components/editor/HistoryPanel'
 import LayerPanel from '@/components/editor/LayerPanel'
 import QuickToolbar from '@/components/editor/QuickToolbar'
 import ToolPanel from '@/components/editor/ToolPanel'
 import TransformPanel from '@/components/editor/TransformPanel'
+import { RunProgress } from '@/components/RunProgress'
 import { useLoadedImages } from '@/components/editor/useLoadedImages'
+import { useRunStream } from '@/hooks/useRunStream'
 import type { Layer } from '@/domain/layerDoc'
 import { referencedAssetIds, topmostVisibleImageLayer } from '@/domain/layerDoc'
 
 const ZOOM_STEP = 0.1
 const ZOOM_MIN = 0.1
 const ZOOM_MAX = 4
+
+/** 排队型（重像素）工具 → 采用后的图层名。 */
+const QUEUED_TOOL_LABEL: Record<string, string> = {
+  erase_region: '局部消除结果',
+  replace_region: '局部替换结果',
+}
 
 export default function EditorPage() {
   const { sessionId = '' } = useParams()
@@ -74,6 +92,8 @@ export default function EditorPage() {
     onSuccess: (result) => {
       queryClient.setQueryData(['session', sessionId], result.session)
       void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
+      // 排队型工具：立即切到进度流，生成完自动采用
+      if (result.run_id) setActiveRun({ id: result.run_id, tool: result.tool })
     },
     onError: () => {
       void queryClient.invalidateQueries({ queryKey: ['session', sessionId] })
@@ -85,9 +105,74 @@ export default function EditorPage() {
   const [toolName, setToolName] = useState<string | null>(null)
   const [zoom, setZoom] = useState<number | null>(null) // null = 适应容器
   const [currentScale, setCurrentScale] = useState(0)
+  const [selectionMode, setSelectionMode] = useState<SelectionMode>('off')
+  const [brushRadius, setBrushRadius] = useState(0.03)
+  const [activeRun, setActiveRun] = useState<{ id: string; tool: string } | null>(null)
   const stageRef = useRef<Konva.Stage | null>(null)
 
   const data = session.data as SessionOut | undefined
+  const revision = data?.revision ?? null
+
+  /**
+   * 当前选区。queryKey 带 revision：文档一变（工具/撤销/重做）整个查询
+   * 自动失效重取，过期选区后端返回 null，overlay 无感消失 ——
+   * 「改图后旧选区自动失效」（DoD ③）在前端的表现就是这个键。
+   */
+  const selection = useQuery({
+    queryKey: ['selection', sessionId, revision],
+    queryFn: () => getSelection(sessionId),
+    enabled: Boolean(sessionId) && revision !== null,
+  })
+
+  const updateSelection = useMutation({
+    mutationFn: (payload: Parameters<typeof createSelection>[1]) =>
+      createSelection(sessionId, payload),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['selection', sessionId, revision], result)
+    },
+    onError: () => {
+      // 409 = 画布已变：丢本地状态，让用户重新选
+      void queryClient.invalidateQueries({ queryKey: ['session', sessionId] })
+      void queryClient.invalidateQueries({ queryKey: ['selection', sessionId] })
+    },
+  })
+
+  const removeSelection = useMutation({
+    mutationFn: () => clearSelection(sessionId),
+    onSuccess: () => {
+      queryClient.setQueryData(['selection', sessionId, revision], null)
+    },
+  })
+
+  // ---- 排队任务的进度流与自动采用 ----
+  const runStream = useRunStream(activeRun?.id ?? null)
+  const adoptingRef = useRef(false)
+
+  useEffect(() => {
+    if (!activeRun || !runStream.closed || runStream.status !== 'succeeded') return
+    const asset = runStream.candidates[0]
+    if (!asset) {
+      setActiveRun(null)
+      return
+    }
+    // 结果只上墙 → 自动采用为新图层（与候选页同一入口 add_image_layer）
+    if (!adoptingRef.current) {
+      adoptingRef.current = true
+      runTool.mutate(
+        {
+          name: 'add_image_layer',
+          params: {
+            asset_id: asset.assetId,
+            name: QUEUED_TOOL_LABEL[activeRun.tool] ?? '编辑结果',
+          },
+        },
+        { onSettled: () => {
+          adoptingRef.current = false
+          setActiveRun(null)
+        } },
+      )
+    }
+  }, [activeRun, runStream, runTool])
 
   // asset_id -> 预签名地址。必须 useMemo：useLoadedImages 靠引用变化去重
   const urlMap = useMemo(() => {
@@ -167,6 +252,7 @@ export default function EditorPage() {
   }
 
   const doc = data.doc
+  const selectionData = selection.data ?? null
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
@@ -188,6 +274,53 @@ export default function EditorPage() {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          {/* 选区三件套：模式切换 / 笔刷半径 / 清除。视图状态，不进文档 */}
+          <Segmented
+            size="small"
+            value={selectionMode}
+            onChange={(value) => setSelectionMode(value as SelectionMode)}
+            options={[
+              { label: '选区·关', value: 'off' },
+              { label: '点选', value: 'point' },
+              { label: '笔刷', value: 'brush' },
+            ]}
+          />
+          {selectionMode === 'brush' && (
+            <Popover
+              placement="bottomRight"
+              content={
+                <div className="w-44 px-1 pt-1">
+                  <p className="text-muted m-0 mb-2 text-xs">笔刷粗细</p>
+                  <Slider
+                    min={0.005}
+                    max={0.12}
+                    step={0.005}
+                    value={brushRadius}
+                    onChange={setBrushRadius}
+                    tooltip={{ formatter: (v) => `${Math.round((v ?? 0) * 1000)}‰` }}
+                  />
+                </div>
+              }
+              trigger="click"
+            >
+              <Button size="small" type="text">
+                粗细
+              </Button>
+            </Popover>
+          )}
+          {selectionData && (
+            <Tooltip title="清除当前选区">
+              <Button
+                size="small"
+                type="text"
+                icon={<ClearOutlined />}
+                loading={removeSelection.isPending}
+                onClick={() => removeSelection.mutate()}
+                aria-label="清除选区"
+              />
+            </Tooltip>
+          )}
+
           <Tooltip title="缩小">
             <Button
               size="small"
@@ -234,6 +367,15 @@ export default function EditorPage() {
           message="这次改动没能保存到服务端，画布已回滚到上一次成功的状态。"
         />
       )}
+      {updateSelection.isError && (
+        <Alert
+          className="m-2 mb-0"
+          type="warning"
+          showIcon
+          closable
+          message="选区没能保存（画布可能刚变过），请重新点选或涂抹。"
+        />
+      )}
 
       {/* ---- 三栏 ---- */}
       <div className="flex min-h-0 flex-1">
@@ -244,7 +386,7 @@ export default function EditorPage() {
 
         {/* 中：画布 + 候选图条 */}
         <section className="flex min-w-0 flex-1 flex-col">
-          <div className="bg-soft min-h-0 flex-1 overflow-auto p-4">
+          <div className="bg-soft relative min-h-0 flex-1 overflow-auto p-4">
             <div className="flex min-h-full items-start justify-center">
               <CanvasStage
                 doc={doc}
@@ -253,8 +395,41 @@ export default function EditorPage() {
                 zoom={zoom}
                 stageRef={stageRef}
                 onScaleChange={setCurrentScale}
+                selectionMode={selectionMode}
+                brushRadius={brushRadius}
+                maskUrl={selectionData?.mask.url ?? null}
+                markers={selectionData?.markers ?? []}
+                selectionBusy={updateSelection.isPending}
+                onPointClick={(point) =>
+                  updateSelection.mutate({
+                    revision: data.revision,
+                    points: [point],
+                    append: true,
+                  })
+                }
+                onStrokeEnd={(points) =>
+                  updateSelection.mutate({
+                    revision: data.revision,
+                    strokes: [points],
+                    radius: brushRadius,
+                    append: true,
+                  })
+                }
               />
             </div>
+
+            {/* 排队任务进度：浮在画布上方，完成后自动采用并消失 */}
+            {activeRun && !runStream.closed && (
+              <div className="absolute bottom-4 left-1/2 w-72 -translate-x-1/2">
+                <div className="bg-paper border-line rounded-card border p-3 shadow-md">
+                  <RunProgress
+                    status={runStream.status}
+                    progress={runStream.progress}
+                    stage={runStream.stage}
+                  />
+                </div>
+              </div>
+            )}
           </div>
           <CandidateStrip
             doc={doc}
@@ -297,6 +472,7 @@ export default function EditorPage() {
                 ['画布', `${doc.canvas.width} × ${doc.canvas.height}`],
                 ['导出格式', 'PNG'],
                 ['图层数', String(doc.layers.length)],
+                ['选区', selectionData ? '已有（工具将作用于选区内）' : '无'],
               ].map(([key, value]) => (
                 <div key={key} className="flex items-center justify-between py-0.5">
                   <dt className="text-faint">{key}</dt>

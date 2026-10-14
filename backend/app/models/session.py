@@ -49,6 +49,11 @@ class EditSession(Base):
     # 文档本身永远表示「当前状态」，这一列表示「站在历史的哪一格」，redo 靠它往前走。
     history_seq: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # 乐观锁版本号：每次文档真的变化（工具生效 / 撤销 / 重做 / 整份替换）自增。
+    # 选区缓存 payload 带创建时的 revision，之后对不上即视为过期 ——
+    # 画布已经变了，旧选区指的像素已经不是用户点过的那些，继续用会把新图改坏。
+    revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False, server_default="0")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

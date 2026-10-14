@@ -14,17 +14,30 @@
  * M5 起这里把文档里此前**只读不画**的字段补上了：`adjustments`（调色）、
  * `crop`（裁剪）、`transform.flip_x/flip_y`（翻转）。工具能改但画布不渲染，
  * 等于功能做了一半 —— 用户只会认为那个工具坏了。
+ *
+ * M6 起增加选区交互：点选（每次点击 = 一个提示点）与笔刷（按住拖动涂抹）。
+ * 选区是**视图伴随状态**：遮罩 overlay 与提示点由后端选区服务下发，
+ * 不进文档、不产生撤销记录。交互层只在选区模式激活时监听事件，
+ * 平时保持 listening=false 不干扰画布渲染。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { MutableRefObject } from 'react'
-import { Image as KonvaImage, Layer as KonvaLayer, Rect, Stage } from 'react-konva'
+import { Circle, Group, Image as KonvaImage, Layer as KonvaLayer, Line, Rect, Stage } from 'react-konva'
 
 import type { LayerCanvas, LayerDocument, Layer as LayerModel } from '@/domain/layerDoc'
+import type { SelectionMarker } from '@/api/sessions'
 import { layerRect, layerSourceAssetId } from '@/domain/layerDoc'
 import { adjustedSource } from './adjustedSource'
 import type { ImageMap } from './useLoadedImages'
+
+export type SelectionMode = 'off' | 'point' | 'brush'
+
+interface NormalizedPoint {
+  x: number
+  y: number
+}
 
 /**
  * 单个图层。
@@ -71,6 +84,27 @@ function LayerNode({
   )
 }
 
+/** 遮罩 overlay 图：后端下发的半透明 PNG，随选区生成/失效整体出现或消失。 */
+function MaskOverlay({ url }: { url: string }) {
+  const [image, setImage] = useState<HTMLImageElement | null>(null)
+
+  useEffect(() => {
+    if (!url) {
+      setImage(null)
+      return
+    }
+    const img = new window.Image()
+    img.onload = () => setImage(img)
+    img.src = url
+    return () => {
+      img.onload = null
+    }
+  }, [url])
+
+  if (!image) return null
+  return <KonvaImage image={image} opacity={0.45} listening={false} />
+}
+
 export default function CanvasStage({
   doc,
   images,
@@ -78,6 +112,13 @@ export default function CanvasStage({
   zoom = null,
   stageRef,
   onScaleChange,
+  selectionMode = 'off',
+  brushRadius = 0.03,
+  maskUrl = null,
+  markers = [],
+  selectionBusy = false,
+  onPointClick,
+  onStrokeEnd,
 }: {
   doc: LayerDocument
   images: ImageMap
@@ -88,9 +129,22 @@ export default function CanvasStage({
   stageRef?: MutableRefObject<Konva.Stage | null>
   /** 实际生效的倍率回传给顶栏显示（fit 时的倍率只有这里算得出来） */
   onScaleChange?: (scale: number) => void
+  selectionMode?: SelectionMode
+  /** 笔刷半径，相对画布短边的比例 */
+  brushRadius?: number
+  maskUrl?: string | null
+  markers?: SelectionMarker[]
+  selectionBusy?: boolean
+  /** 点选模式下的单击回调（归一化坐标） */
+  onPointClick?: (point: NormalizedPoint) => void
+  /** 笔刷模式下一笔结束的回调（归一化坐标序列） */
+  onStrokeEnd?: (points: NormalizedPoint[]) => void
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const [boxWidth, setBoxWidth] = useState(0)
+  // 正在画的笔迹（文档像素坐标），mouseup 时归一化交出去
+  const [stroke, setStroke] = useState<NormalizedPoint[] | null>(null)
+  const drawingRef = useRef(false)
 
   // 容器宽度是唯一外部约束：编辑区旁边还有面板，写死宽度必然会溢出
   useEffect(() => {
@@ -114,8 +168,51 @@ export default function CanvasStage({
     if (scale > 0) onScaleChange?.(scale)
   }, [scale, onScaleChange])
 
+  // 选区模式切换时丢弃没画完的笔迹，避免上一次模式的残影
+  useEffect(() => {
+    if (selectionMode !== 'brush') setStroke(null)
+  }, [selectionMode])
+
   // layers 数组从下到上，直接顺序渲染即可（不需要翻转 —— 翻转是为了给面板看）
   const drawable = doc.layers.filter((layer) => layer.visible)
+
+  function pointerNormalized(): NormalizedPoint | null {
+    const stage = stageRef?.current
+    const pos = stage?.getPointerPosition()
+    if (!pos || scale === 0) return null
+    return { x: pos.x / scale / canvasWidth, y: pos.y / scale / canvasHeight }
+  }
+
+  function handleClick() {
+    if (selectionMode !== 'point' || selectionBusy || !onPointClick) return
+    const point = pointerNormalized()
+    if (point) onPointClick(point)
+  }
+
+  function handleMouseDown() {
+    if (selectionMode !== 'brush' || selectionBusy || !onStrokeEnd) return
+    drawingRef.current = true
+    const point = pointerNormalized()
+    if (point) setStroke([point])
+  }
+
+  function handleMouseMove() {
+    if (!drawingRef.current) return
+    const point = pointerNormalized()
+    if (point) setStroke((prev) => (prev ? [...prev, point] : [point]))
+  }
+
+  function handleMouseUp() {
+    if (!drawingRef.current) return
+    drawingRef.current = false
+    if (stroke && stroke.length > 0 && onStrokeEnd) {
+      onStrokeEnd(stroke)
+    }
+    setStroke(null)
+  }
+
+  const brushWidthPx = Math.max(2, Math.min(canvasWidth, canvasHeight) * brushRadius)
+  const markerRadius = Math.max(4, Math.min(canvasWidth, canvasHeight) * 0.008)
 
   return (
     // 放大后要能拖动滚动条看细节，容器自身交给外层布局滚
@@ -129,6 +226,15 @@ export default function CanvasStage({
           height={canvasHeight * scale}
           scaleX={scale}
           scaleY={scale}
+          onClick={handleClick}
+          onTap={handleClick}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onTouchMove={handleMouseMove}
+          onTouchEnd={handleMouseUp}
+          style={{ cursor: selectionMode === 'off' ? 'default' : 'crosshair' }}
         >
           <KonvaLayer listening={false}>
             {doc.canvas.background && (
@@ -148,7 +254,41 @@ export default function CanvasStage({
                 />
               )
             })}
+
+            {/* 选区 overlay 与提示点：渲染属于画布，状态不属于文档 */}
+            <MaskOverlay url={maskUrl ?? ''} />
+            {markers.map((marker) => (
+              <Group key={marker.index} listening={false}>
+                <Circle
+                  x={marker.x * canvasWidth}
+                  y={marker.y * canvasHeight}
+                  radius={markerRadius}
+                  fill="#ffffff"
+                  stroke={SELECTION_COLOR}
+                  strokeWidth={2}
+                />
+                <Circle
+                  x={marker.x * canvasWidth}
+                  y={marker.y * canvasHeight}
+                  radius={markerRadius * 0.4}
+                  fill={SELECTION_COLOR}
+                />
+              </Group>
+            ))}
           </KonvaLayer>
+
+          {/* 正在画的笔迹预览：纯视觉反馈，松手才交给服务端 */}
+          {stroke && stroke.length > 0 && (
+            <KonvaLayer listening={false}>
+              <Line
+                points={stroke.flatMap((p) => [p.x * canvasWidth, p.y * canvasHeight])}
+                stroke="rgba(95, 152, 173, 0.55)"
+                strokeWidth={brushWidthPx}
+                lineCap="round"
+                lineJoin="round"
+              />
+            </KonvaLayer>
+          )}
         </Stage>
       )}
 
@@ -158,3 +298,5 @@ export default function CanvasStage({
     </div>
   )
 }
+
+const SELECTION_COLOR = '#5f98ad'

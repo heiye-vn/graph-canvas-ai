@@ -41,6 +41,8 @@ class InvokeResponse(BaseModel):
     tool: str
     message: str
     session: SessionOut
+    """排队型工具（局部编辑等）提交出的任务 id；确定性工具为 None。"""
+    run_id: uuid.UUID | None = None
 
 
 @router.get("")
@@ -79,4 +81,5 @@ async def invoke_tool(
         tool=name,
         message=steps[0].message,
         session=await sessions_service.to_out(session, updated),
+        run_id=steps[0].run_id,
     )

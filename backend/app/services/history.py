@@ -35,7 +35,7 @@ from app.models.history import HISTORY_LIMIT
 from app.schemas.layer_doc import LayerDocument
 from app.services import sessions as sessions_service
 from app.services import tool_exec
-from app.tools.base import ToolContext, ToolError
+from app.tools.base import QueuedOutcome, ToolContext, ToolError
 
 __all__ = [
     "HISTORY_LIMIT",
@@ -60,6 +60,8 @@ class StepResult(BaseModel):
     message: str
     """这一步是否真的改了文档（False = 记了历史但画布没动）。"""
     changed: bool = True
+    """排队型工具提交出的任务 id —— 前端凭它订阅进度流。"""
+    run_id: uuid.UUID | None = None
 
 
 @dataclass
@@ -91,12 +93,14 @@ async def apply_tool_calls(
     doc = LayerDocument.model_validate(edit_session.doc)
 
     steps: list[StepResult] = []
+    queued: list[tuple[str, QueuedOutcome]] = []
     for call in calls:
         ctx = ToolContext(
             session_id=edit_session.id,
             user_id=user_id,
             doc=doc,
             pinned=pinned or {},
+            db=session,
         )
         try:
             result = await tool_exec.invoke(call.name, call.params, ctx)
@@ -104,6 +108,32 @@ async def apply_tool_calls(
             steps.append(
                 StepResult(tool=call.name, args=call.params, ok=False, message=exc.message)
             )
+            continue
+
+        if isinstance(result, QueuedOutcome):
+            # 排队型工具：run 已落库，任务在**本事务提交后**才投递 ARQ ——
+            # 先投递再提交会有竞态：worker 抢到任务时 run 行还不存在
+            await _record(
+                session,
+                edit_session,
+                tool=call.name,
+                label=result.message,
+                changed=False,
+                before=doc,
+                after=doc,
+                params=call.params,
+            )
+            steps.append(
+                StepResult(
+                    tool=call.name,
+                    args=call.params,
+                    ok=True,
+                    message=result.message,
+                    changed=False,
+                    run_id=result.run_id,
+                )
+            )
+            queued.append((result.task, result))
             continue
 
         # 标签用**这一步的结果说明**而不是工具名：
@@ -135,8 +165,18 @@ async def apply_tool_calls(
     # 结果就是「画布没变但撤销栈里多了一条」，用户按撤销看到的是上一步的图。
     if _differs(LayerDocument.model_validate(edit_session.doc), doc):
         edit_session.doc = doc.model_dump(mode="json")
+        # revision 只在文档真的变化时自增：选区失效的裁判是它，
+        # 「重复设置同一个值」这类 changed=False 的操作不该作废选区
+        edit_session.revision += 1
 
     await session.commit()
+
+    # 事务已落地，现在投递排队任务（顺序：先库后队列，杜绝幽灵任务）
+    from app.services import queue as queue_service
+
+    for task, outcome in queued:
+        await queue_service.enqueue(task, outcome.run_id)
+
     await session.refresh(edit_session)
     return edit_session, steps
 
@@ -273,6 +313,8 @@ async def undo(
             break
         seq -= 1
 
+    # 撤销同样改变像素：选区必须跟着作废（revision 是唯一裁判，方向无关）
+    edit_session.revision += 1
     # 即使只跳过了几条「画布没变」的记录也要提交：指针动了对用户是有意义的
     # （下一次 undo 该从新位置继续），留着不写会让读到的位置和实际不一致
     await session.commit()
@@ -303,6 +345,7 @@ async def redo(
         # 后面全是「画布没变」的记录或根本没有记录 → 指针一步也不该动，回滚掉试探
         await session.rollback()
         raise _nothing_to_do("重做")
+    edit_session.revision += 1
     await session.commit()
     await session.refresh(edit_session)
     return TimeTravelResult(edit_session, label)

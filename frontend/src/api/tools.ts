@@ -45,10 +45,18 @@ export interface StepOutcome {
   note: string | null
 }
 
+export interface InvokeResponse {
+  tool: string
+  message: string
+  session: SessionOut
+  /** 排队型工具（局部编辑等）提交出的任务 id；确定性工具为 null */
+  run_id: string | null
+}
+
 export const listTools = () => apiGet<{ items: ToolMeta[] }>('/tools')
 
 export const invokeTool = (name: string, session_id: string, params: Record<string, unknown>) =>
-  apiPost<{ tool: string; message: string; session: SessionOut }>(`/tools/${name}/invoke`, {
+  apiPost<InvokeResponse>(`/tools/${name}/invoke`, {
     session_id,
     params,
   })
