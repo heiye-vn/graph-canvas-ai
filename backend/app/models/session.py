@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -44,6 +44,10 @@ class EditSession(Base):
     # 图层文档：唯一真相源，结构由 app/schemas/layer_doc.py 的 LayerDocument 定义。
     # 读写一律经过那个 pydantic 模型校验，这里只当普通 JSONB 存。
     doc: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+
+    # 当前所处的历史位置：0 = 初始状态（还没任何操作），N = 已应用第 N 条记录。
+    # 文档本身永远表示「当前状态」，这一列表示「站在历史的哪一格」，redo 靠它往前走。
+    history_seq: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

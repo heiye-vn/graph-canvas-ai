@@ -7,15 +7,65 @@
  *
  * 缩放只用一个 scale：Stage 尺寸 = 画布尺寸 × scale，坐标仍是文档里的画布像素。
  * 这样以后加节点变换/选区时不用做「屏幕坐标 ⇄ 文档坐标」的第二套换算。
+ *
+ * M5 起这里把文档里此前**只读不画**的字段补上了：`adjustments`（调色）、
+ * `crop`（裁剪）、`transform.flip_x/flip_y`（翻转）。工具能改但画布不渲染，
+ * 等于功能做了一半 —— 用户只会认为那个工具坏了。
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type Konva from 'konva'
 import { Image as KonvaImage, Layer as KonvaLayer, Rect, Stage } from 'react-konva'
 
-import type { LayerDocument } from '@/domain/layerDoc'
+import type { LayerCanvas, LayerDocument, Layer as LayerModel } from '@/domain/layerDoc'
 import { layerRect, layerSourceAssetId } from '@/domain/layerDoc'
+import { adjustedSource } from './adjustedSource'
 import type { ImageMap } from './useLoadedImages'
+
+/**
+ * 单个图层。
+ *
+ * 抽成组件而不是内联 map 出去：每个图层需要自己的 useMemo（按 own 的
+ * adjustments 缓存离屏 canvas），Hook 不能写在循环里。
+ */
+function LayerNode({
+  layer,
+  canvas,
+  image,
+}: {
+  layer: LayerModel
+  canvas: LayerCanvas
+  image: HTMLImageElement
+}) {
+  const rect = layerRect(layer, canvas)
+
+  // 依赖写具体的字段而不是整层的对象引用：文档每次保存都是新对象，
+  // 用对象做依赖会让所有图层在任意一次改动后全部重算
+  const source = useMemo(
+    () => adjustedSource(image, layer.adjustments),
+    [image, layer.adjustments],
+  )
+
+  const crop = layer.crop
+  return (
+    <KonvaImage
+      image={source as Konva.ImageConfig['image']}
+      x={layer.transform.flip_x ? rect.x + rect.width : rect.x}
+      y={layer.transform.flip_y ? rect.y + rect.height : rect.y}
+      width={rect.width}
+      height={rect.height}
+      rotation={rect.rotation}
+      scaleX={layer.transform.flip_x ? -1 : 1}
+      scaleY={layer.transform.flip_y ? -1 : 1}
+      opacity={layer.opacity}
+      crop={
+        crop
+          ? { x: crop.x, y: crop.y, width: crop.width, height: crop.height }
+          : undefined
+      }
+    />
+  )
+}
 
 export default function CanvasStage({
   doc,
@@ -64,17 +114,12 @@ export default function CanvasStage({
               const assetId = layerSourceAssetId(layer)
               const image = assetId ? images[assetId] : undefined
               if (!image) return null
-              const rect = layerRect(layer, doc.canvas)
               return (
-                <KonvaImage
+                <LayerNode
                   key={layer.id}
-                  image={image as Konva.ImageConfig['image']}
-                  x={rect.x}
-                  y={rect.y}
-                  width={rect.width}
-                  height={rect.height}
-                  rotation={rect.rotation}
-                  opacity={layer.opacity}
+                  layer={layer}
+                  canvas={doc.canvas}
+                  image={image}
                 />
               )
             })}

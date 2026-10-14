@@ -29,6 +29,13 @@ from pydantic import BaseModel, Field, model_validator
 LayerType = Literal["image", "text", "shape"]
 
 DOC_VERSION = 1
+"""文档结构版本号。
+
+⚠️ 加字段时**不要随便动这个数字**：只有「旧文档读出来会解析失败或语义变了」
+才需要升版本。新增字段一律带默认值 + Optional（见 crop / flip_x / flip_y），
+老文档自然能解读为「没有裁剪、没有翻转」，升版本反而会让存量会话全部读入失败，
+还得写一遍洗数据迁移。
+"""
 
 DEFAULT_LAYER_NAME: dict[str, str] = {
     "image": "图像层",
@@ -49,6 +56,37 @@ class Transform(BaseModel):
     width: float | None = None
     height: float | None = None
     rotation: float = 0.0
+    flip_x: bool = False
+    flip_y: bool = False
+
+    @property
+    def flipped(self) -> bool:
+        """是否发生了翻转。渲染层据此决定绕中线镜像，避免到处写 `flip_x or flip_y`。
+
+        刻意做成**普通属性而不是字段**：它完全由 flip_x / flip_y 推出来，
+        一旦存进 JSON 就有了「两份可能不一致的真相」。
+        """
+        return self.flip_x or self.flip_y
+
+
+class Crop(BaseModel):
+    """在**素材原始像素**上取一块出来显示。
+
+    坐标用的是素材自己的像素，不是画布像素 —— 这样图层被移动/缩放/旋转时，
+    裁剪窗口跟着图层走，不需要跟着换算。
+
+    与 transform.width/height 的分工：**crop 决定取原图的哪一块，
+    transform 决定这一块画在画布上的位置和大小**。两层分开后，
+    「裁一块再放大到指定位置」是一次赋值的事，而不是两个互相纠缠的比例。
+
+    四个字段都是**整数**：裁剪窗口对准的是素材自身的像素网格，
+    允许 3.7 个像素的窗口除了让用户困惑之外没有任何用处。
+    """
+
+    x: int = Field(default=0, ge=0)
+    y: int = Field(default=0, ge=0)
+    width: int = Field(gt=0, le=8192)
+    height: int = Field(gt=0, le=8192)
 
 
 class ImageSource(BaseModel):
@@ -85,6 +123,7 @@ class Layer(BaseModel):
     source: ImageSource | None = None
     text: TextContent | None = None
     adjustments: Adjustments = Field(default_factory=Adjustments)
+    crop: Crop | None = None
 
     @model_validator(mode="after")
     def _payload_matches_type(self) -> Layer:

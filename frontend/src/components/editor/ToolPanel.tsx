@@ -31,6 +31,7 @@ export default function ToolPanel({ sessionId }: { sessionId: string }) {
     mutationFn: () => invokeTool(tool!.name, sessionId, values),
     onSuccess: (result) => {
       queryClient.setQueryData(['session', sessionId], result.session)
+      void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
     },
   })
 

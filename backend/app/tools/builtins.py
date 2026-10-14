@@ -13,11 +13,11 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.layer_doc import Adjustments, TextContent, Transform
+from app.schemas.layer_doc import Adjustments, Crop, TextContent, Transform
 from app.services import layer_doc as L
 from app.tools.base import ToolContext, ToolError, ToolResult, ToolSpec
 from app.tools.registry import register
@@ -183,6 +183,67 @@ async def rotate_layer(params: RotateLayerParams, ctx: ToolContext) -> ToolResul
     layer = _target(ctx, params.layer)
     doc = L.update_layer(ctx.doc, layer.id, {"transform": {"rotation": params.degrees}})
     return ToolResult(doc, f"「{layer.name}」已旋转 {params.degrees}°")
+
+
+# ------------------------------------------------------------------ 裁剪与翻转
+
+
+class CropLayerParams(LayerRef):
+    x: int = Field(
+        default=0, ge=0, description="裁剪区左上角横坐标（素材原始像素）",
+        json_schema_extra={"label": "左边缘"},
+    )
+    y: int = Field(
+        default=0, ge=0, description="裁剪区左上角纵坐标（素材原始像素）",
+        json_schema_extra={"label": "上边缘"},
+    )
+    width: int = Field(
+        gt=0, le=8192, description="裁剪宽度（像素）", json_schema_extra={"label": "宽度"}
+    )
+    height: int = Field(
+        gt=0, le=8192, description="裁剪高度（像素）", json_schema_extra={"label": "高度"}
+    )
+
+
+async def crop_layer(params: CropLayerParams, ctx: ToolContext) -> ToolResult:
+    layer = _target(ctx, params.layer)
+    doc = L.update_layer(
+        ctx.doc,
+        layer.id,
+        {
+            "crop": Crop(x=params.x, y=params.y, width=params.width, height=params.height),
+            # 显示尺寸同步为裁剪尺寸：裁下来的那一块按原大小放下，
+            # 而不是把 100×100 的裁剪区拉满原本 1000×1000 的框（那是缩放，不是裁剪）
+            "transform": {"width": params.width, "height": params.height},
+        },
+    )
+    return ToolResult(doc, f"「{layer.name}」已裁剪为 {params.width}×{params.height}")
+
+
+class ResetCropParams(LayerRef):
+    pass
+
+
+async def reset_crop(params: ResetCropParams, ctx: ToolContext) -> ToolResult:
+    layer = _target(ctx, params.layer)
+    doc = L.update_layer(ctx.doc, layer.id, {"crop": None})
+    return ToolResult(doc, f"「{layer.name}」已还原完整画布")
+
+
+class FlipLayerParams(LayerRef):
+    direction: Literal["horizontal", "vertical"] = Field(
+        default="horizontal",
+        description="翻转方向：horizontal 左右，vertical 上下",
+        json_schema_extra={"label": "方向"},
+    )
+
+
+async def flip_layer(params: FlipLayerParams, ctx: ToolContext) -> ToolResult:
+    layer = _target(ctx, params.layer)
+    horizontal = params.direction == "horizontal"
+    key = "flip_x" if horizontal else "flip_y"
+    doc = L.update_layer(ctx.doc, layer.id, {"transform": {key: not getattr(layer.transform, key)}})
+    return ToolResult(doc, f"「{layer.name}」已{'左右' if horizontal else '上下'}翻转")
 
 
 # ------------------------------------------------------------------ 增删图层
@@ -385,6 +446,21 @@ def install_builtin_tools() -> None:
         "set_canvas_background", "画布背景",
         "设置画布背景色",
         SetCanvasBackgroundParams, set_canvas_background, "画布",
+    )
+    _tool(
+        "crop_layer", "裁剪",
+        "裁剪某个图层到指定区域（按素材原始像素）",
+        CropLayerParams, crop_layer, "变换",
+    )
+    _tool(
+        "reset_crop", "还原裁剪",
+        "取消某个图层的裁剪，露出完整画面",
+        ResetCropParams, reset_crop, "变换",
+    )
+    _tool(
+        "flip_layer", "翻转",
+        "左右或上下翻转某个图层（再执行一次可翻回来）",
+        FlipLayerParams, flip_layer, "变换",
     )
 
 

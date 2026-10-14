@@ -35,6 +35,8 @@ export interface StepResult {
   args: Record<string, unknown>
   ok: boolean
   message: string
+  /** 这一步是否真的改了文档（false = 记了历史但画布没动） */
+  changed: boolean
 }
 
 export interface StepOutcome {

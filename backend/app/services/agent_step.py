@@ -11,6 +11,10 @@
      模型的输出里就不该出现 id
   2. 工具执行失败要当成正常结果返回给调用方（带 ok=False），
      而不是让整个请求 500 —— 一句指令里有一个工具失败，其余的仍然有效
+
+M5 起这里与 `/api/tools/{name}/invoke` 共用 `history.apply_tool_calls`：
+手动调用与模型调用写进同一条撤销栈。否则用户会发现「自动帮我做的那些操作撤销不了」，
+而那恰恰是最需要撤回的一部分。
 """
 
 from __future__ import annotations
@@ -21,17 +25,11 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.layer_doc import LayerDocument
+from app.services import history as history_service
 from app.services import sessions as sessions_service
 from app.services import tool_exec
-from app.tools.base import ToolContext, ToolError
+from app.services.history import StepResult, ToolCall  # noqa: F401 - 兼容既有导入
 from app.tools.registry import function_schemas
-
-
-class StepResult(BaseModel):
-    tool: str
-    args: dict
-    ok: bool
-    message: str
 
 
 class StepOutcome(BaseModel):
@@ -64,21 +62,12 @@ async def run_step(
             note="这句话没有对应到可执行的操作，换一种说法试试（例如「把图调亮一点」）。",
         )
 
-    steps: list[StepResult] = []
-    for call in calls:
-        ctx = ToolContext(session_id=edit_session.id, user_id=user_id, doc=doc)
-        try:
-            result = await tool_exec.invoke(call["name"], call.get("args") or {}, ctx)
-            doc = result.doc
-            ok, message = True, result.message
-        except ToolError as exc:
-            ok, message = False, exc.message
-        steps.append(StepResult(tool=call["name"], args=call["args"], ok=ok, message=message))
+    updated, steps = await history_service.apply_tool_calls(
+        session,
+        user_id=user_id,
+        session_id=session_id,
+        calls=[ToolCall(name=call["name"], params=call.get("args") or {}) for call in calls],
+    )
 
-    if any(step.ok for step in steps):
-        edit_session = await sessions_service.replace_doc(
-            session, user_id=user_id, session_id=edit_session.id, doc=doc
-        )
-
-    out = await sessions_service.to_out(session, edit_session)
+    out = await sessions_service.to_out(session, updated)
     return StepOutcome(steps=steps, session=out.model_dump(mode="json"))

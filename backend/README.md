@@ -58,7 +58,7 @@ pytest                                        # 测试（需要 PG / Redis / 对
 | GET | `/api/edit-sessions` | 本人会话列表（含图层数 / 素材数） |
 | GET | `/api/edit-sessions/{id}` | **恢复现场**：文档 + 带预签名 URL 的素材 |
 | POST | `/api/edit-sessions/{id}/assets` | 追加素材（幂等：重复加入不产生第二个图层） |
-| PUT | `/api/edit-sessions/{id}/doc` | 整份替换图层文档 |
+| PUT | `/api/edit-sessions/{id}/doc` | 整份替换图层文档（**不写历史**，绕过撤销栈 —— 只有重建现场时才用） |
 | PATCH | `/api/edit-sessions/{id}` | 改标题 |
 | DELETE | `/api/edit-sessions/{id}` | 删除会话 |
 
@@ -72,7 +72,33 @@ pytest                                        # 测试（需要 PG / Redis / 对
 > 得到不同结果，而且很难复现。
 >
 > 文档写入走**整份替换**而非 patch：一次操作可能同时改变层级顺序、可见性和载荷，
-> 用 diff 表达这些既啰嗦又容易错。乐观并发保护留到 M5 撤销栈真正并发时再加。
+> 用 diff 表达这些既啰嗦又容易错。
+
+### 撤销栈（M5）
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| GET | `/api/edit-sessions/{id}/history` | 指针位置 + `can_undo` / `can_redo` + 留存记录（**不含快照**） |
+| POST | `/api/edit-sessions/{id}/history/undo` | 退一步；已在初始态 → 409 |
+| POST | `/api/edit-sessions/{id}/history/redo` | 前进一步；已在最新 → 409 |
+
+> **快照式而非反向操作**：每条历史存 `before` / `after` 两份整文档，undo 写回
+> before、redo 写回 after。反向操作要为 16 个工具各写一份严格对称的 undo 逻辑，
+> 任何一处不对称（比如忘了记 reorder 的原索引）都会悄悄改坏文档。
+>
+> **文档与历史必须在同一个事务里写**。只写历史不写文档 → 「画布没变但栈里多了一条」；
+> 只写文档不写历史 → 这一步再也退不回去。这就是为什么工具统一走
+> `history.apply_tool_calls()` 而不是各自调 `replace_doc()`。
+>
+> **UI 上的改动也必须走工具入口**。M3 时图层面板直接改文档（那时还没有历史），
+> M5 起改成调 `set_layer_visible` / `switch_current_image` —— 否则用户会发现
+> 「有些操作退不回去」，而这恰恰最说不通。
+>
+> `changed=False` 的历史照样保留，但撤销时跳过：重复设置一个已经成立的值，
+> 不该让「按了撤销没反应」。留记录是因为用户在编辑记录里要找得到自己刚才那一下。
+>
+> 上限 50 条，超了丢最老的且**不重排 seq** —— 重排会让指针一夜之间指向别的条目。
+> 撤到边界就停住，比撤到错误的中间态好得多。
 
 ### 工具与 Agent（M4）
 
@@ -82,9 +108,14 @@ pytest                                        # 测试（需要 PG / Redis / 对
 | POST | `/api/tools/{name}/invoke` | 直接调一个工具（参数错 → 422 `bad_params`） |
 | POST | `/api/agent/step` | 一句话 → LLM 选工具 → 执行 → 回执（工具/参数/说明） |
 
-已注册 13 个工具：`adjust_color` `set_opacity` `set_layer_visible` `rename_layer`
+已注册 **16 个**工具：`adjust_color` `set_opacity` `set_layer_visible` `rename_layer`
 `reorder_layer` `switch_current_image` `remove_layer` `add_image_layer` `move_layer`
-`resize_layer` `rotate_layer` `add_text_layer` `set_canvas_background`。
+`resize_layer` `rotate_layer` `crop_layer` `reset_crop` `flip_layer` `add_text_layer`
+`set_canvas_background`。
+
+> ⚠️ 加字段时**不要升 `DOC_VERSION`**：新字段一律带默认值（见 `crop` / `flip_x`），
+> 老文档自然解读为「没有裁剪、没有翻转」。升版本会让存量会话全部读不进来，
+> 还得再写一遍洗数据迁移。
 
 > **一处定义三处消费**：工具的入参只写一份 Pydantic Model，同时派生
 > ① 服务端校验（`model_validate`）、② LLM function schema、③ `/api/tools` 的表单元数据。

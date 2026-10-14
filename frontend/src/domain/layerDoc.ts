@@ -16,6 +16,14 @@
 
 export type LayerType = 'image' | 'text' | 'shape'
 
+export interface LayerCrop {
+  /** 相对**素材原始像素**的裁剪窗口 */
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 export interface LayerTransform {
   x: number
   y: number
@@ -23,6 +31,8 @@ export interface LayerTransform {
   width: number | null
   height: number | null
   rotation: number
+  flip_x: boolean
+  flip_y: boolean
 }
 
 export interface ImageSource {
@@ -53,6 +63,8 @@ export interface Layer {
   source?: ImageSource
   text?: TextContent
   adjustments: Adjustments
+  /** 没有裁剪时为 null —— 与后端 Layer.crop 一致 */
+  crop: LayerCrop | null
 }
 
 export interface LayerCanvas {

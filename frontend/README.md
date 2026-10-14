@@ -12,7 +12,8 @@ src/
 ├── lib/         brand / marketing（文案集中）/ antdTheme（组件库主题）
 ├── components/  通用件：BrandMark / PageHeader / AssetCard / RunProgress / ProtectedRoute
 │                editor/：画布专属件（CanvasStage / LayerPanel / useLoadedImages）
-│                         ToolPanel（元数据驱动表单）/ AgentBar（一句话改图）
+│                         ToolPanel（元数据驱动表单）/ AgentBar（一句话改图）/
+│                         HistoryBar（撤销 / 重做）/ adjustedSource（离屏调色）
 │                landing/：落地页专属组件（Hero / PromptComposer / Showcase / Steps / CTA）
 ├── stores/      Zustand：canvasView / editorUi / agentRun / toasts
 └── pages/       Landing（公开）/ Assets / Create / Candidates / Editor（索引 + 详情）
@@ -62,6 +63,22 @@ npm run test     # vitest：只跑 src/**/*.test.ts（领域层纯函数）
 > **为什么只给领域层写测试**：UI 组件的断言价值低且脆，
 > 而 `domain/layerDoc.ts` 里那三条约定（数组顺序、默认图层、切换当前图）
 > 一旦漂了，表现是「画布显示的不是被改的那个图层」，要很久才能定位到这里。
+> `domain/pixels.ts` 同属这一类 —— 但它被单拎出来测试的理由更硬：
+> **DoD ③「透明通道的图调色不发黑」**，坏掉之后的表现在 UI 上只是「图糊了」，
+> 谁也不会想到是 alpha 通道的事。
+
+### 调色为什么不走 Konva filters
+
+`domain/pixels.ts` 只写 RGB、**从不写第 4 个字节**，透明区域因此永远透明。
+等价的做法是用 Konva 自定义 filter，但那条路有两个问题：
+
+1. Konva 的 filter 靠 `this` 绑定读节点属性，属于内部机制，版本一换可能静默失效，
+   而失效的表现是「调色突然没效果了」，很难往 filter 上想；
+2. 自定义 filter 必须配合 `node.cache()`，cache 时机与图像加载时机一错开就是空白。
+
+离屏 canvas 的路径没这两个问题，而且像素运算本身能在 vitest 里一行断言钉住。
+代价是每次参数变化要拷一张 bitmap —— 所以 `adjustedSource()`
+在参数全中性时直接返回原图，不做无谓拷贝。
 
 ### 安装踩坑（本机必读）
 
@@ -108,9 +125,13 @@ esbuild 的 postinstall 会 `spawnSync node esbuild --version` 做二进制校�
   `agent_hidden` 的参数在表单上带 🔒 标记：它由界面选择或服务端回填，不是给人填的。
 - 素材卡统一用 `components/AssetCard` —— 创作页历史素材、素材库、候选页此前有三份
   figure 各自为政，改一次圆角必然漏两处。
-- **编辑会话的状态只有一个真相源**：服务端那份 LayerDocument。
-  画布与图层面板都只是它的投影，不在 store 里再藏一份「真正被编辑的东西」——
-  那样刷新之后到底以谁为准就永远说不清了。改动走「乐观更新 + 失败回滚」。
+- **「编辑会话的状态只有一个真相源」这一条延伸成了两条硬规矩**：
+  - 画布与图层面板都只是投影，不在 store 里再藏一份「真正被编辑的东西」；
+  - **任何改动都用服务端返回的 session 覆盖缓存**，不在本地推导下一份文档 ——
+    新图层的 id、服务端补的默认值都在那份响应里，本地推导迟早漏点什么。
+- **改动一律走工具入口，绝不直接 PUT 文档**：图层面板的「显示/隐藏」「设为当前图」
+  也调 `set_layer_visible` / `switch_current_image`。直接改文档的那条路径不写历史，
+  用户会发现「有些操作退不回去」。
 - 「用素材开会话」统一走 `hooks/useCreateSession.ts`：候选页和素材库各写一遍的结果是
   跳转目标与失败处理各不一样。
 - 构建产物按 `react` / `antd` / 业务代码分三块：antd 体积占了一半以上但几乎不变，

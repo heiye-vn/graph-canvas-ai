@@ -1,30 +1,32 @@
 /**
  * 编辑工作台。
  *
- * 三条原则在这里落地：
+ * 四条原则在这里落地：
  *   1. **session id 在 URL 上** —— 刷新重建、分享直达都靠它
  *   2. **文档是唯一真相源** —— 画布和图层面板都只是它的投影，没有一个
  *      「真正被编辑的东西」藏在 store 里；刷新后从 REST 拿回来的就是下一次渲染的全部输入
- *   3. **改动先乐观更新、失败回滚** —— 切个图层还要等一轮 HTTP 太钝，
- *      但请求失败必须能回到服务端真实状态，否则用户看到的是幻觉
+ *   3. **所有改动都走工具入口** —— M5 起这条不能破：面板上的「显示/隐藏」「设为当前图」
+ *      以前是直接改文档，那样它们不会进撤销栈，用户会发现「有些操作退不回去」
+ *   4. **失败回滚** —— 请求失败必须能回到服务端真实状态，否则用户看到的是幻觉
  */
 
 import { useMemo } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Result, Skeleton, Spin } from 'antd'
-import { SaveOutlined } from '@ant-design/icons'
+import { Alert, Result, Skeleton } from 'antd'
+import { Button } from 'antd'
 
-import { getSession, replaceSessionDoc } from '@/api/sessions'
+import { getSession } from '@/api/sessions'
 import type { SessionOut } from '@/api/sessions'
+import { invokeTool } from '@/api/tools'
 import AgentBar from '@/components/editor/AgentBar'
 import CanvasStage from '@/components/editor/CanvasStage'
+import HistoryBar from '@/components/editor/HistoryBar'
 import LayerPanel from '@/components/editor/LayerPanel'
 import ToolPanel from '@/components/editor/ToolPanel'
 import { useLoadedImages } from '@/components/editor/useLoadedImages'
 import PageHeader from '@/components/PageHeader'
-import type { LayerDocument } from '@/domain/layerDoc'
-import { referencedAssetIds, setLayerVisible, switchCurrentImage } from '@/domain/layerDoc'
+import { referencedAssetIds } from '@/domain/layerDoc'
 
 export default function EditorPage() {
   const { sessionId = '' } = useParams()
@@ -37,10 +39,25 @@ export default function EditorPage() {
     retry: false,
   })
 
-  const save = useMutation({
-    mutationFn: (doc: LayerDocument) => replaceSessionDoc(sessionId, doc),
+  /**
+   * 面板上任何改动都从这里走。
+   *
+   * 成功后用服务端返回的 session 覆盖缓存（而不是本地算一份）：
+   * 图层的新 id、服务端补的默认值都在那份响应里，本地推导迟早漏点什么。
+   */
+  const runTool = useMutation({
+    mutationFn: ({
+      name,
+      params,
+    }: {
+      name: string
+      params: Record<string, unknown>
+    }) => invokeTool(name, sessionId, params),
+    onSuccess: (result) => {
+      queryClient.setQueryData(['session', sessionId], result.session)
+      void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
+    },
     onError: () => {
-      // 服务端没接受这次改动，重新拉一次回到真实状态
       void queryClient.invalidateQueries({ queryKey: ['session', sessionId] })
     },
   })
@@ -59,12 +76,6 @@ export default function EditorPage() {
   }, [data])
 
   const { images, pending } = useLoadedImages(urlMap)
-
-  function commit(next: LayerDocument) {
-    if (!data) return
-    queryClient.setQueryData(['session', sessionId], { ...data, doc: next })
-    save.mutate(next)
-  }
 
   if (session.isLoading) {
     return (
@@ -97,22 +108,9 @@ export default function EditorPage() {
       <PageHeader
         title={data.title}
         description={`${doc.canvas.width}×${doc.canvas.height} · ${doc.layers.length} 个图层`}
-        extra={
-          <span className="text-faint inline-flex items-center gap-2 text-xs">
-            {save.isPending ? (
-              <>
-                <Spin size="small" /> 保存中
-              </>
-            ) : (
-              <>
-                <SaveOutlined /> 已同步到服务端
-              </>
-            )}
-          </span>
-        }
       />
 
-      {save.isError && (
+      {runTool.isError && (
         <Alert
           className="mb-4"
           type="error"
@@ -126,6 +124,8 @@ export default function EditorPage() {
         <AgentBar sessionId={sessionId} />
       </div>
 
+      <HistoryBar sessionId={sessionId} />
+
       <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
         <section className="border-line bg-paper shadow-card flex min-h-[26rem] items-start justify-center rounded-card border p-4">
           <CanvasStage doc={doc} images={images} loading={pending} />
@@ -135,8 +135,16 @@ export default function EditorPage() {
           <h2 className="text-muted mb-2 text-sm font-medium">图层</h2>
           <LayerPanel
             doc={doc}
-            onToggleVisible={(layerId, visible) => commit(setLayerVisible(doc, layerId, visible))}
-            onSwitchCurrent={(layerId) => commit(switchCurrentImage(doc, layerId))}
+            busy={runTool.isPending}
+            onToggleVisible={(layerId, visible) =>
+              runTool.mutate({
+                name: 'set_layer_visible',
+                params: { layer: layerId, visible },
+              })
+            }
+            onSwitchCurrent={(layerId) =>
+              runTool.mutate({ name: 'switch_current_image', params: { layer: layerId } })
+            }
           />
 
           <h2 className="text-muted mt-6 mb-2 text-sm font-medium">工具</h2>

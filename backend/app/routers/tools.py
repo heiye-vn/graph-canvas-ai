@@ -6,6 +6,9 @@
 
 `POST /api/tools/{name}/invoke` 是给「确定性操作」用的：模型不参与，
 参数由界面给出。它的存在也让工具链路在没有配置模型 Key 的情况下可以被验证。
+
+M5 起这两个入口**都写历史**（`services/history.py`）：手动点一次和让模型做一次，
+在撤销栈里必须是同一种东西 —— 否则用户会发现「自动帮我做的那些操作撤销不了」。
 """
 
 from __future__ import annotations
@@ -20,11 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
-from app.schemas.layer_doc import LayerDocument
 from app.schemas.session import SessionOut
+from app.services import history as history_service
 from app.services import sessions as sessions_service
-from app.services import tool_exec
-from app.tools.base import ToolContext, ToolError
 from app.tools.builtins import install_builtin_tools  # noqa: F401 - 导入即注册
 from app.tools.registry import get_tool, metadata
 
@@ -57,29 +58,25 @@ async def invoke_tool(
     if get_tool(name) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工具不存在")
 
-    edit_session = await sessions_service.get_edit_session(
-        session, user.id, payload.session_id
-    )
-    ctx = ToolContext(
-        session_id=edit_session.id,
+    # UI 给的参数同时也是「服务端回填」的来源：asset_id 这类隐藏字段由界面传，
+    # 不走模型那条路
+    updated, steps = await history_service.apply_tool_calls(
+        session,
         user_id=user.id,
-        doc=LayerDocument.model_validate(edit_session.doc),
-        # UI 给的参数全部作为「服务端回填」的来源：asset_id 这类隐藏字段由界面传，
-        # 不走模型那条路
+        session_id=payload.session_id,
+        calls=[history_service.ToolCall(name=name, params=payload.params)],
         pinned=payload.params,
     )
 
-    try:
-        result = await tool_exec.invoke(name, payload.params, ctx)
-    except ToolError as exc:
-        # 工具自己的业务失败对用户是可解释的，给 422 而不是 500
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=exc.message)
+    # 单工具入口保持「失败就是失败」的语义：这里是确定性调用，没有别的步骤要救
+    if not steps or not steps[0].ok:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=steps[0].message if steps else "工具执行失败",
+        )
 
-    updated = await sessions_service.replace_doc(
-        session, user_id=user.id, session_id=edit_session.id, doc=result.doc
-    )
     return InvokeResponse(
         tool=name,
-        message=result.message,
+        message=steps[0].message,
         session=await sessions_service.to_out(session, updated),
     )

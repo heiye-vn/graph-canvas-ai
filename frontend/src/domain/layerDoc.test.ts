@@ -35,9 +35,10 @@ function imageLayer(name: string, visible = true, assetId = `asset-${(seq += 1)}
     visible,
     locked: false,
     opacity: 1,
-    transform: { x: 0, y: 0, width: null, height: null, rotation: 0 },
+    transform: { x: 0, y: 0, width: null, height: null, rotation: 0, flip_x: false, flip_y: false },
     source: { asset_id: assetId },
     adjustments: { brightness: 0, contrast: 0, saturation: 0, temperature: 0 },
+    crop: null,
   }
 }
 

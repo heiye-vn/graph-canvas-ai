@@ -28,10 +28,13 @@ export default function LayerPanel({
   doc,
   onToggleVisible,
   onSwitchCurrent,
+  busy = false,
 }: {
   doc: LayerDocument
   onToggleVisible: (layerId: string, visible: boolean) => void
   onSwitchCurrent: (layerId: string) => void
+  /** 有请求在飞：禁用按钮，避免同一步连点两次而多出一条历史 */
+  busy?: boolean
 }) {
   return (
     <List
@@ -48,6 +51,7 @@ export default function LayerPanel({
                 <Button
                   type="text"
                   size="small"
+                  disabled={busy}
                   icon={layer.visible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
                   onClick={() => onToggleVisible(layer.id, !layer.visible)}
                   aria-label={layer.visible ? '隐藏图层' : '显示图层'}
@@ -78,7 +82,13 @@ export default function LayerPanel({
             />
             {layer.type === 'image' && layer.visible === false && (
               <Tooltip title="把它设为当前图（其余候选图隐藏）">
-                <Button type="link" size="small" icon={<StarOutlined />} onClick={() => onSwitchCurrent(layer.id)}>
+                <Button
+                  type="link"
+                  size="small"
+                  disabled={busy}
+                  icon={<StarOutlined />}
+                  onClick={() => onSwitchCurrent(layer.id)}
+                >
                   设为当前图
                 </Button>
               </Tooltip>

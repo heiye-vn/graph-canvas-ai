@@ -25,6 +25,9 @@ export default function AgentBar({ sessionId }: { sessionId: string }) {
       setSteps(outcome.steps)
       setNote(outcome.note)
       queryClient.setQueryData(['session', sessionId], outcome.session)
+      // 模型这条链路同样写历史 —— 撤销面板要跟着长出来，
+      // 否则用户会以为「自动帮我做的那些退不回去」
+      void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
       setInstruction('')
     },
   })
@@ -72,6 +75,11 @@ export default function AgentBar({ sessionId }: { sessionId: string }) {
                   {step.tool}
                 </Tag>
                 {step.message}
+                {step.ok && !step.changed && (
+                  <Tag bordered={false} className="m-0">
+                    画布未变
+                  </Tag>
+                )}
               </span>
             </List.Item>
           )}

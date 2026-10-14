@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
-from app.schemas.layer_doc import LayerDocument
+from app.schemas.history import HistoryEntry, HistoryOut, TimeTravelOut
 from app.schemas.session import (
     AddSessionAssetsRequest,
     CreateSessionRequest,
@@ -27,26 +27,19 @@ from app.schemas.session import (
     SessionSummary,
     UpdateSessionRequest,
 )
-from app.services import assets as asset_service
+from app.services import history as history_service
 from app.services import sessions as sessions_service
 
 router = APIRouter(prefix="/edit-sessions", tags=["edit-sessions"])
 
 
 async def _to_out(session: AsyncSession, edit_session) -> SessionOut:
-    """把 ORM 对象组装成响应：文档按 LayerDocument 解析，素材补预签名 URL。"""
-    doc = LayerDocument.model_validate(edit_session.doc)
-    asset_ids = await sessions_service.session_assets(session, edit_session.id)
-    found = await asset_service.list_assets_by_ids(session, edit_session.user_id, asset_ids)
+    """把 ORM 对象组装成响应：文档按 LayerDocument 解析，素材补预签名 URL。
 
-    return SessionOut(
-        id=edit_session.id,
-        title=edit_session.title,
-        doc=doc,
-        assets=[asset_service.asset_to_out(asset) for asset in found],
-        created_at=edit_session.created_at,
-        updated_at=edit_session.updated_at,
-    )
+    注意 edit_sessions 与 tools 两个路由里各有一份 `to_out`：服务端那份在
+    `services/sessions.py`，两边都调它 —— 「会话长什么样」的答案必须只有一处。
+    """
+    return await sessions_service.to_out(session, edit_session)
 
 
 @router.post("", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
@@ -141,6 +134,81 @@ async def rename_session(
         session, user_id=user.id, session_id=session_id, title=payload.title
     )
     return await _to_out(session, edit_session)
+
+
+@router.get("/{session_id}/history", response_model=HistoryOut)
+async def get_history(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> HistoryOut:
+    """撤销栈的当前状态：指针位置 + 留存记录。
+
+    这里是**不下发文档快照**的（原因见 schemas/history.py），
+    所以列表不能直接拿给前端做画布，只能用来回答问题：「刚才做了什么、还能退回几步」。
+    """
+    edit_session = await sessions_service.get_edit_session(session, user.id, session_id)
+    entries = await history_service.list_history(session, user_id=user.id, session_id=session_id)
+
+    return HistoryOut(
+        seq=edit_session.history_seq,
+        can_undo=await history_service.can_undo(session, edit_session.id, edit_session.history_seq),
+        can_redo=await history_service.can_redo(session, edit_session.id, edit_session.history_seq),
+        items=[
+            HistoryEntry(
+                seq=entry.seq,
+                tool=entry.tool,
+                label=entry.label,
+                changed=entry.changed,
+                created_at=entry.created_at,
+            )
+            for entry in entries
+        ],
+    )
+
+
+async def _time_travel(
+    back: bool, session: AsyncSession, user: User, session_id: uuid.UUID
+) -> TimeTravelOut:
+    """撤销 / 重做的共同尾巴：拿新文档，顺便把新的指针位置一起回传。
+
+    `can_undo` / `can_redo` 必须跟着返回：前端如果为了显示按钮状态再发一次 GET，
+    在快速连点时会出现「按钮可点但请求 409」的窗口。
+
+    不可操作时由服务层抛 409 直接透传 —— 「撤销到底了」是一种状态，不是异常。
+    """
+    travel = history_service.undo if back else history_service.redo
+    result = await travel(session, user_id=user.id, session_id=session_id)
+
+    edit_session = result.edit_session
+    seq = edit_session.history_seq
+    return TimeTravelOut(
+        session=(await sessions_service.to_out(session, edit_session)).model_dump(mode="json"),
+        label=result.label,
+        seq=seq,
+        can_undo=await history_service.can_undo(session, edit_session.id, seq),
+        can_redo=await history_service.can_redo(session, edit_session.id, seq),
+    )
+
+
+@router.post("/{session_id}/history/undo", response_model=TimeTravelOut)
+async def undo_step(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> TimeTravelOut:
+    """退一步。已经在初始状态时返回 **409** —— 这不是参数错误，是当前状态不允许。"""
+    return await _time_travel(True, session, user, session_id)
+
+
+@router.post("/{session_id}/history/redo", response_model=TimeTravelOut)
+async def redo_step(
+    session_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> TimeTravelOut:
+    """前进一步。指针已经在最新一步时返回 **409**。"""
+    return await _time_travel(False, session, user, session_id)
 
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
