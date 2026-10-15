@@ -226,6 +226,16 @@ export default function EditorPage() {
     }
     return null
   }, [data])
+  // 对比的前提是「藏起最上层还能看到别的东西」：可见图像层 < 2 时无从比起，
+  // 硬按只会把画布掏成白底（文字层目前不上画布，M7 重构后另说）
+  const visibleImageLayerCount = useMemo(
+    () => (data?.doc.layers ?? []).filter((l) => l.visible && l.type === 'image').length,
+    [data],
+  )
+  const canCompare = visibleImageLayerCount >= 2
+  useEffect(() => {
+    if (compare && !canCompare) setCompare(false)
+  }, [compare, canCompare])
   const hiddenLayerIds = compare && topImageLayerId ? [topImageLayerId] : null
 
   function invoke(name: string, params: Record<string, unknown>) {
@@ -346,11 +356,12 @@ export default function EditorPage() {
               />
             </Tooltip>
           )}
-          <Tooltip title="隐藏最上层图像，对比编辑前后效果">
+          <Tooltip title={canCompare ? '隐藏最上层图像，对比编辑前后效果' : '至少需要两层可见图像（例如一次局部编辑的结果叠在原图上）才能对比'}>
             <Button
               size="small"
               type={compare ? 'primary' : 'text'}
               icon={<SwapOutlined />}
+              disabled={!canCompare}
               onClick={() => setCompare((prev) => !prev)}
               aria-label="对比编辑前后"
             >
