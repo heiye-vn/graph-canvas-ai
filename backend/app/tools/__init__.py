@@ -9,3 +9,6 @@ from app.tools import (
     builtins,  # noqa: F401  导入即注册
     region,  # noqa: F401  M6 局部编辑（排队型工具）
 )
+from app.tools import (
+    split as split_tools,  # noqa: F401  M7 拆层（排队型工具）
+)

@@ -279,6 +279,57 @@ async def add_text_layer(params: AddTextLayerParams, ctx: ToolContext) -> ToolRe
     return ToolResult(doc, f"已添加文字层：「{params.text[:20]}」")
 
 
+class SetLayerTextParams(LayerRef):
+    """改文字层文案。图层缺省时作用于最上层可见的文字层。
+
+    位置与字号刻意**不在参数里**（除非显式要改）：拆层产出的文字层
+    位置来自 OCR 检测框，「文案可改且字体位置不变」（M7 DoD ②）
+    靠的就是改文案不动几何。
+    """
+
+    text: str = Field(
+        min_length=1, max_length=500, description="新的文案内容",
+        json_schema_extra={"label": "文案"},
+    )
+    font_size: int | None = Field(
+        default=None, gt=0, le=512, description="字号（不填保持不变）",
+        json_schema_extra={"label": "字号"},
+    )
+    fill: str | None = Field(
+        default=None, pattern=r"^#[0-9a-fA-F]{6}$", description="文字颜色（不填保持不变）",
+        json_schema_extra={"label": "颜色"},
+    )
+
+
+async def set_layer_text(params: SetLayerTextParams, ctx: ToolContext) -> ToolResult:
+    from app.schemas.layer_doc import TextContent
+
+    if params.layer:
+        layer = _target(ctx, params.layer)
+    else:
+        layer = L.topmost_visible_text_layer(ctx.doc)
+        if layer is None:
+            raise ToolError(
+                "画布上没有文字图层：先用「拆层（同时拆出文字）」生成，或用「加文字」新建",
+                code="no_text_layer",
+            )
+    if layer.type != "text" or layer.text is None:
+        raise ToolError(f"「{layer.name}」不是文字图层，只能改文字层的文案", code="not_text")
+
+    text = TextContent(
+        text=params.text,
+        font_size=params.font_size if params.font_size is not None else layer.text.font_size,
+        fill=params.fill if params.fill is not None else layer.text.fill,
+    )
+    # 只改文案与名字，几何（transform）一律不动 —— 位置稳定性是 DoD ②
+    doc = L.update_layer(
+        ctx.doc,
+        layer.id,
+        {"text": text.model_dump(), "name": params.text[:12] or layer.name},
+    )
+    return ToolResult(doc, f"文字已改为：「{params.text[:20]}」")
+
+
 class RemoveLayerParams(LayerRef):
     pass
 
@@ -461,6 +512,11 @@ def install_builtin_tools() -> None:
         "flip_layer", "翻转",
         "左右或上下翻转某个图层（再执行一次可翻回来）",
         FlipLayerParams, flip_layer, "变换",
+    )
+    _tool(
+        "set_layer_text", "改文字",
+        "修改文字图层的文案，可选字号与颜色。未指定图层时改最上层可见文字。",
+        SetLayerTextParams, set_layer_text, "编辑",
     )
 
 

@@ -181,6 +181,35 @@ async def apply_tool_calls(
     return edit_session, steps
 
 
+async def record_external(
+    session: AsyncSession,
+    edit_session: EditSession,
+    *,
+    tool: str,
+    label: str,
+    after: LayerDocument,
+    params: dict[str, Any] | None = None,
+) -> None:
+    """worker 进程替排队型工具落文档 + 历史（拆层这类「执行后整份换文档」的任务）。
+
+    与 apply_tool_calls 共用 _record：撤销栈里必须找得到 worker 干的活，
+    否则用户拆完层按撤销会「没反应」。调用方负责在同一事务里 commit。
+    """
+    before = LayerDocument.model_validate(edit_session.doc)
+    await _record(
+        session,
+        edit_session,
+        tool=tool,
+        label=label,
+        changed=True,
+        before=before,
+        after=after,
+        params=params or {},
+    )
+    edit_session.doc = after.model_dump(mode="json")
+    edit_session.revision += 1
+
+
 async def _record(
     session: AsyncSession,
     edit_session: EditSession,

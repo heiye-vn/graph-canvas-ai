@@ -24,7 +24,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { MutableRefObject } from 'react'
-import { Circle, Group, Image as KonvaImage, Layer as KonvaLayer, Line, Rect, Stage } from 'react-konva'
+import { Circle, Group, Image as KonvaImage, Layer as KonvaLayer, Line, Rect, Stage, Text as KonvaText } from 'react-konva'
 
 import type { LayerCanvas, LayerDocument, Layer as LayerModel } from '@/domain/layerDoc'
 import type { SelectionMarker } from '@/api/sessions'
@@ -103,6 +103,39 @@ function MaskOverlay({ url }: { url: string }) {
 
   if (!image) return null
   return <KonvaImage image={image} opacity={0.45} listening={false} />
+}
+
+/**
+ * 文字层渲染（M7）。
+ *
+ * 对齐规则与服务端 edits/render.py 的 _composite_text 一致：
+ * 文字在图层框（transform.x/y/width/height）内水平垂直居中。
+ * 字体栈把 Windows 的微软雅黑放最前 —— 服务端 Pillow 在本机命中的
+ * 就是 msyh.ttc，两边同字体才能保证「所见即拍平所得」。
+ */
+const CANVAS_FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif'
+
+function TextNode({ layer, canvas }: { layer: LayerModel; canvas: LayerCanvas }) {
+  const rect = layerRect(layer, canvas)
+  const text = layer.text
+  if (!text) return null
+  return (
+    <KonvaText
+      x={rect.x}
+      y={rect.y}
+      width={Math.max(8, rect.width)}
+      height={Math.max(12, rect.height)}
+      text={text.text}
+      fontSize={Math.max(8, text.font_size)}
+      fill={text.fill}
+      align="center"
+      verticalAlign="middle"
+      fontFamily={CANVAS_FONT_STACK}
+      opacity={layer.opacity}
+      rotation={rect.rotation}
+      listening={false}
+    />
+  )
 }
 
 export default function CanvasStage({
@@ -246,6 +279,11 @@ export default function CanvasStage({
             )}
 
             {drawable.map((layer) => {
+              // M7 起文字层直接上画布（此前只在面板展示）——拆层产出的
+              // 文字层必须看得到，「文案可改且位置不变」才有验证对象
+              if (layer.type === 'text') {
+                return <TextNode key={layer.id} layer={layer} canvas={doc.canvas} />
+              }
               const assetId = layerSourceAssetId(layer)
               const image = assetId ? images[assetId] : undefined
               if (!image) return null

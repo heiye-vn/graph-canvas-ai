@@ -79,6 +79,14 @@ def topmost_visible_image_layer(doc: LayerDocument) -> Layer | None:
     return None
 
 
+def topmost_visible_text_layer(doc: LayerDocument) -> Layer | None:
+    """文字类工具（改文字）的默认目标：最上层可见的文字层。"""
+    for layer in top_down(doc):
+        if layer.visible and layer.type == "text":
+            return layer
+    return None
+
+
 def add_layer(doc: LayerDocument, layer: Layer) -> LayerDocument:
     """把图层追加为**最上层**并返回新文档（不修改入参）。"""
     updated = doc.model_copy(deep=True)

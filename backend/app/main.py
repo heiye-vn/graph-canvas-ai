@@ -44,21 +44,28 @@ async def lifespan(app: FastAPI):
     await run_in_threadpool(storage.ensure_bucket)
     logger.info("对象存储就绪：bucket=%s", storage.bucket_name())
 
-    # SAM 预热：首次点选本要承担十几秒的模型加载。后台跑、不阻塞启动；
-    # 模型缺失/下载失败只打日志 —— auto 模式点选时还有画圆兜底
+    # 预热两条重模型的链路（都在后台跑、失败只告警、不阻塞启动）：
+    # SAM —— 点选分割；rembg/u2net —— 拆层的主体分离
     if settings.matting_provider in ("auto", "sam"):
         import asyncio
 
         from app.edits.segment import warm_session
+        from app.tasks.split import warm_matting
 
-        async def _preheat_sam() -> None:
+        async def _preheat_models() -> None:
             try:
                 await run_in_threadpool(warm_session)
                 logger.info("SAM 会话预热完成，点选即点即用")
             except Exception as exc:  # noqa: BLE001 - 预热失败不阻塞启动
                 logger.warning("SAM 预热失败（首次点选将现场加载）：%s", exc)
 
-        app.state.sam_preheat = asyncio.create_task(_preheat_sam())
+            try:
+                await run_in_threadpool(warm_matting)
+                logger.info("rembg 会话预热完成，拆层即点即用")
+            except Exception as exc:  # noqa: BLE001 - 预热失败不阻塞启动
+                logger.warning("rembg 预热失败（首次拆层将现场加载）：%s", exc)
+
+        app.state.preheat = asyncio.create_task(_preheat_models())
 
     try:
         yield

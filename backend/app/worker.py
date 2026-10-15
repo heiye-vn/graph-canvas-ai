@@ -12,6 +12,7 @@ from arq.connections import RedisSettings
 from app.config import get_settings
 from app.tasks.image import text_to_image
 from app.tasks.region import inpaint_region
+from app.tasks.split import split_layers
 
 logger = logging.getLogger("graph-canvas-ai.worker")
 
@@ -37,7 +38,7 @@ async def shutdown(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [text_to_image, inpaint_region]
+    functions = [text_to_image, inpaint_region, split_layers]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 4
     job_timeout = 300

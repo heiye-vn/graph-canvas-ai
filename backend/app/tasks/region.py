@@ -118,15 +118,16 @@ async def inpaint_region(ctx, run_id: str) -> None:
             await events.publish(DoneEvent(run_id=run.id, status=run.status))
 
 
-async def _edit_with_clamp(run: ToolRun, source: bytes, prompt: str) -> bytes:
+async def edit_image_clamped(image: bytes, prompt: str) -> bytes:
     """Provider 编辑；边长 clamp 到 [512, 2048]（M6 关键设计 ⑤）。
 
     太小的图直接送模型，生成质量崩；太大的图又慢又贵。缩放发生在
     送模型之前，结果送回来先放大回原尺寸再合成 —— 选区遮罩始终
     作用在原始分辨率上，精度不因 clamp 损失。
+    供局部编辑（region）与拆层背景修补（split）共用。
     """
-    image = Image.open(io.BytesIO(source))
-    width, height = image.size
+    img = Image.open(io.BytesIO(image))
+    width, height = img.size
     longest = max(width, height)
     scale = 1.0
     if longest > _EDIT_MAX_EDGE:
@@ -134,20 +135,14 @@ async def _edit_with_clamp(run: ToolRun, source: bytes, prompt: str) -> bytes:
     elif longest < _EDIT_MIN_EDGE:
         scale = _EDIT_MIN_EDGE / longest
 
-    payload = source
+    payload = image
     if scale != 1.0:
-        resized = image.resize(
+        resized = img.resize(
             (int(width * scale), int(height * scale)), Image.Resampling.LANCZOS
         )
         buffer = io.BytesIO()
         resized.save(buffer, format="PNG")
         payload = buffer.getvalue()
-
-    tool = run.tool
-    if tool == "erase_region":
-        prompt = prompt or _ERASE_PROMPT
-    else:  # replace_region 的 prompt 由参数层保证非空
-        prompt = f"只改选中区域：{prompt}。选区外的主体、光线和背景必须保持原样。"
 
     provider = get_image_provider()
     edited = (await provider.edit_image(payload, prompt))[0]
@@ -160,3 +155,13 @@ async def _edit_with_clamp(run: ToolRun, source: bytes, prompt: str) -> bytes:
         back.save(buffer, format="PNG")
         edited = buffer.getvalue()
     return edited
+
+
+async def _edit_with_clamp(run: ToolRun, source: bytes, prompt: str) -> bytes:
+    """按工具语义包装 prompt（消除/替换各有固定句式），再走 clamp 编辑。"""
+    tool = run.tool
+    if tool == "erase_region":
+        prompt = prompt or _ERASE_PROMPT
+    else:  # replace_region 的 prompt 由参数层保证非空
+        prompt = f"只改选中区域：{prompt}。选区外的主体、光线和背景必须保持原样。"
+    return await edit_image_clamped(source, prompt)

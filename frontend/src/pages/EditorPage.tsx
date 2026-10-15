@@ -155,6 +155,18 @@ export default function EditorPage() {
   useEffect(() => {
     if (!activeRun || !runStream.closed || runStream.status !== 'succeeded') return
     const asset = runStream.candidates[0]
+
+    // 拆层：worker 已整份替换文档并落撤销栈 —— 前端只需重新拉会话，
+    // 绝不能走 add_image_layer（会把主体再叠一层出来）
+    if (activeRun.tool === 'split_layers') {
+      void queryClient.invalidateQueries({ queryKey: ['session', sessionId] })
+      void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
+      void queryClient.invalidateQueries({ queryKey: ['selection', sessionId] })
+      message.success('拆层完成，画布已重建为 背景/主体/文字 三层')
+      setActiveRun(null)
+      return
+    }
+
     if (!asset) {
       setActiveRun(null)
       return
@@ -180,7 +192,7 @@ export default function EditorPage() {
         },
       )
     }
-  }, [activeRun, runStream, runTool])
+  }, [activeRun, runStream, runTool, queryClient, sessionId])
 
   const queueRun = (runId: string, tool: string) => setActiveRun({ id: runId, tool })
 
@@ -508,6 +520,10 @@ export default function EditorPage() {
                 invoke('set_layer_visible', { layer: layerId, visible })
               }
               onSwitchCurrent={(layerId) => invoke('switch_current_image', { layer: layerId })}
+              onEditText={(layerId) => {
+                setSelectedLayerId(layerId)
+                setToolName('set_layer_text')
+              }}
             />
           </section>
 

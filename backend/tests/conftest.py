@@ -35,6 +35,8 @@ _TEST_ENV = {
     "JWT_SECRET": os.getenv("TEST_JWT_SECRET", "test-only-secret-please-do-not-use-in-prod"),
     "JWT_TTL_HOURS": "1",
     "IMAGE_PROVIDER": "mock",
+    # OCR 引擎加载要秒级，测试一律走 none —— detect_text 的降级分支单独测
+    "OCR_PROVIDER": "none",
     "ASSET_UPLOAD_MODE": "backend",
 }
 

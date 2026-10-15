@@ -13,6 +13,7 @@
 import { Button, Tooltip } from 'antd'
 import {
   BorderOutlined,
+  EditOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   FileImageOutlined,
@@ -35,6 +36,7 @@ export default function LayerPanel({
   onSelect,
   onToggleVisible,
   onSwitchCurrent,
+  onEditText,
   busy = false,
 }: {
   doc: LayerDocument
@@ -43,6 +45,8 @@ export default function LayerPanel({
   onSelect?: (layerId: string) => void
   onToggleVisible: (layerId: string, visible: boolean) => void
   onSwitchCurrent: (layerId: string) => void
+  /** 文字层的「改文案」入口：切到 set_layer_text 工具（M7） */
+  onEditText?: (layerId: string) => void
   /** 有请求在飞：禁用按钮，避免同一步连点两次而多出一条历史 */
   busy?: boolean
 }) {
@@ -93,6 +97,23 @@ export default function LayerPanel({
             <span className="text-faint w-8 shrink-0 text-right text-[10px] tabular-nums">
               {Math.round(layer.opacity * 100)}%
             </span>
+
+            {layer.type === 'text' && onEditText && (
+              <Tooltip title="改文案">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<EditOutlined />}
+                  disabled={busy}
+                  aria-label={`改文案：${layer.name}`}
+                  className="h-6! w-6! shrink-0"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    onEditText(layer.id)
+                  }}
+                />
+              </Tooltip>
+            )}
 
             {layer.type === 'image' && !layer.visible && (
               <Tooltip title="设为当前图（其余候选图隐藏）">

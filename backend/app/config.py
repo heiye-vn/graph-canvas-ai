@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # auto：先试 SAM，任何异常降级画圆 —— 演示环境不为可选依赖崩掉
     matting_provider: Literal["auto", "sam", "circle"] = "auto"
 
+    # ---- 文字检测（M7）----
+    # rapidocr：rapidocr-onnxruntime（cv extra）；none：不检测；
+    # auto：装了就用，任何异常静默返回空（拆层不因 OCR 挂掉）
+    ocr_provider: Literal["auto", "rapidocr", "none"] = "auto"
+
     # ---- Agent（M4）----
     # OpenAI 兼容端点；国内网络默认走百炼的兼容模式，换自建/其它厂商只改这一个变量
     llm_base_url: str | None = None
