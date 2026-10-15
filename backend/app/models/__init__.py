@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 from app.models.agent_run import AgentRun
+from app.models.agent_trace import AgentTrace
 from app.models.history import EditHistory
 from app.models.run import ToolRun
 from app.models.session import EditSession, SessionAsset
@@ -28,6 +29,7 @@ __all__ = [
     "SessionAsset",
     "EditHistory",
     "AgentRun",
+    "AgentTrace",
 ]
 
 

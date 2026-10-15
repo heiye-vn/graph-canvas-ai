@@ -8,7 +8,7 @@
  * 编辑区横向空间寸土寸金，常态不该被导航占掉。
  */
 
-import { AppstoreOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, BarChartOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { Avatar, Button } from 'antd'
 import type { ReactNode } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
@@ -21,6 +21,7 @@ const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/create', label: '创作', icon: <PlusOutlined /> },
   { to: '/assets', label: '素材', icon: <AppstoreOutlined /> },
   { to: '/editor', label: '编辑', icon: <EditOutlined /> },
+  { to: '/metrics', label: '指标', icon: <BarChartOutlined /> },
 ]
 
 export default function WorkbenchLayout() {

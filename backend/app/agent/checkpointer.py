@@ -9,6 +9,7 @@ thread_id = agent_run_id，服务重启后未完成的轮次靠它断点续跑�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from psycopg import AsyncConnection
@@ -46,5 +47,10 @@ async def close_checkpointer() -> None:
     global _saver, _conn
     _saver = None
     if _conn is not None:
-        await _conn.close()
-        _conn = None
+        conn, _conn = _conn, None
+        # 关闭必须带超时：若还有在途的图在用这条连接，close 可能永久等待 ——
+        # 测试与停机场景宁可丢弃连接也不能把进程挂死
+        try:
+            await asyncio.wait_for(conn.close(), timeout=5)
+        except Exception:  # noqa: BLE001
+            logger.warning("checkpointer 连接关闭超时/失败（已放弃）", exc_info=True)

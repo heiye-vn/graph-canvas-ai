@@ -10,6 +10,7 @@ import CreatePage from '@/pages/CreatePage'
 import EditorIndexPage from '@/pages/EditorIndexPage'
 import LandingPage from '@/pages/LandingPage'
 import LoginPage from '@/pages/LoginPage'
+import MetricsPage from '@/pages/MetricsPage'
 import { useAuthStore } from '@/stores/authStore'
 
 /**
@@ -46,6 +47,7 @@ export default function App() {
             <Route path="/assets" element={<AssetsPage />} />
             <Route path="/create" element={<CreatePage />} />
             <Route path="/candidates/:runId" element={<CandidatesPage />} />
+            <Route path="/metrics" element={<MetricsPage />} />
             {/* session id 必须进 URL：刷新/分享都要能回到同一个画布 */}
             <Route path="/editor" element={<EditorIndexPage />} />
             <Route

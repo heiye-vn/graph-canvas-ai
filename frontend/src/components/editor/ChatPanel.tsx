@@ -29,6 +29,8 @@ import type { AgentRun, PlanStep } from '@/api/agent'
 import { useRunStream } from '@/hooks/useRunStream'
 import { useCotStream } from '@/hooks/useCotStream'
 import CoTStream from '@/components/agent/CoTStream'
+import TraceModal from '@/components/agent/TraceModal'
+import { FileSearchOutlined } from '@ant-design/icons'
 
 interface ChatMessage {
   role: 'user' | 'agent'
@@ -185,6 +187,7 @@ function PlanCard({
   const [run, setRun] = useState<AgentRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [traceOpen, setTraceOpen] = useState(false)
   const reportedRef = useRef<string | null>(null)
   // 每次行动（确认/重试/继续）后重开 CoT 流：执行期的 observation 也在同一条通道
   const [cotEpoch, setCotEpoch] = useState(0)
@@ -327,9 +330,19 @@ function PlanCard({
             取消后续
           </Button>
         )}
+        <Button
+          size="small"
+          type="text"
+          icon={<FileSearchOutlined />}
+          onClick={() => setTraceOpen(true)}
+        >
+          轨迹
+        </Button>
       </div>
 
       {error && <p className="text-danger mt-1.5 mb-0">{error}</p>}
+
+      <TraceModal runId={run.id} open={traceOpen} onClose={() => setTraceOpen(false)} />
     </div>
   )
 }

@@ -64,3 +64,51 @@ export const continuePlan = (runId: string, toolRunId: string) =>
 /** 恢复现场：这个会话的历史对话轮（旧→新）。 */
 export const listSessionRuns = (sessionId: string) =>
   apiGet<AgentRun[]>(`/agent/sessions/${sessionId}/runs`)
+
+// ---------------------------------------------------------------- trace / metrics（M9.3）
+
+export interface TraceSpan {
+  id: string
+  agent_run_id: string
+  kind: 'planner' | 'validate' | 'tool' | 'reflect' | 'turn'
+  name: string
+  status: 'ok' | 'failed'
+  duration_ms: number | null
+  prompt_version: string | null
+  model: string | null
+  tokens_in: number | null
+  tokens_out: number | null
+  detail: Record<string, unknown> | null
+  created_at: string
+}
+
+export const getTrace = (runId: string) => apiGet<TraceSpan[]>(`/agent/runs/${runId}/trace`)
+
+export interface VersionMetrics {
+  prompt_version: string
+  plannings: number
+  validate_failed: number
+  reject_rate: number
+  avg_duration_ms: number
+  tokens_out: number
+}
+
+export interface DailyMetrics {
+  day: string
+  rounds: number
+  failed: number
+  steps: number
+}
+
+export interface AgentMetrics {
+  days: number
+  rounds_total: number
+  rejected_total: number
+  reject_rate: number
+  avg_steps_per_round: number
+  tool_fail_rate: number
+  daily: DailyMetrics[]
+  by_prompt_version: VersionMetrics[]
+}
+
+export const getMetrics = (days = 14) => apiGet<AgentMetrics>(`/agent/metrics?days=${days}`)

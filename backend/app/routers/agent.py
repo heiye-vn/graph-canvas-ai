@@ -12,15 +12,16 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
-from app.schemas.agent import AgentRunOut, ContinueRequest, PlanRequest
+from app.schemas.agent import AgentRunOut, ContinueRequest, MetricsOut, PlanRequest, TraceOut
 from app.services import agent_runs as agent_runs_service
+from app.services import traces as traces_service
 from app.services.agent_step import StepOutcome, run_step
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -111,6 +112,26 @@ async def continue_plan(
     return await agent_runs_service.continue_after_tool_run(
         session, user_id=user.id, run_id=run_id, tool_run_id=payload.run_id
     )
+
+
+@router.get("/runs/{run_id}/trace", response_model=list[TraceOut])
+async def get_trace(
+    run_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> list[TraceOut]:
+    """整轮的执行轨迹（DoD ①）：规划 / 校验 / 每步工具 / 反思，按时间排序。"""
+    return await traces_service.trace_of(session, user_id=user.id, run_id=run_id)
+
+
+@router.get("/metrics", response_model=MetricsOut)
+async def agent_metrics(
+    days: int = Query(default=14, ge=1, le=90),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MetricsOut:
+    """可观测指标（DoD ②③）：校验拒绝率趋势 + 按 prompt_version 对比。"""
+    return await traces_service.metrics(session, days=days)
 
 
 @router.get("/sessions/{session_id}/runs", response_model=list[AgentRunOut])

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -37,6 +38,7 @@ from app.models.agent_run import (
 from app.schemas.events import DoneEvent
 from app.services import events
 from app.services import runs as runs_service
+from app.services import traces as traces_service
 
 logger = logging.getLogger("graph-canvas-ai.agent")
 
@@ -192,6 +194,7 @@ async def _drive(
             stream = graph.astream(base, config, stream_mode="updates")
 
         interrupted_kind: str | None = None
+        started = time.monotonic()
         try:
             # ⚠️ stream_mode="updates" 的增量是 {节点名: {channel: 值}}，
             # 不是扁平的 channel 字典 —— 拍平前先剥节点名。
@@ -235,6 +238,22 @@ async def _drive(
                 turn.error = _last_error(state_acc) or "执行失败，可重试或取消"
         turn.plan = final_plan
         await session.commit()
+
+        # 轮级 span：整轮状态 / 重规划次数（M9.3 trace）
+        await traces_service.record_detached(
+            turn.id,
+            turn.session_id,
+            kind="turn",
+            name="agent_turn",
+            status="ok" if turn.status in {"succeeded", "awaiting_confirm"} else "failed",
+            started=started,
+            detail={
+                "status": turn.status,
+                "steps": len(final_plan),
+                "interrupted": interrupted_kind,
+                "errors": state_acc.get("errors") or [],
+            },
+        )
         await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
 
 

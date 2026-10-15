@@ -77,7 +77,7 @@ async def test_stream_planner_pushes_thought_and_tool_call(monkeypatch):
         )
 
     class _Fake:
-        def bind_tools(self, _functions):
+        def bind_tools(self, _functions, **_kwargs):
             return self
 
         def astream(self, _messages):
@@ -88,8 +88,9 @@ async def test_stream_planner_pushes_thought_and_tool_call(monkeypatch):
     async def emit(kind: str, delta: str) -> None:
         pushed.append((kind, delta))
 
-    calls = await llm_module.plan_tool_calls_stream("调亮", "画布摘要", [], emit)
+    calls, meta = await llm_module.plan_tool_calls_stream("调亮", "画布摘要", [], emit)
     assert calls == [{"name": "adjust_color", "args": {"brightness": 20}}]
+    assert meta["model"]  # M9.3：trace 需要 model 与 token 用量
 
     kinds = [kind for kind, _delta in pushed]
     assert "thought" in kinds and "tool_call" in kinds
@@ -102,7 +103,7 @@ def test_stream_wrapper_keeps_planner_error(monkeypatch):
     """astream 抛错也要翻成人话的 PlannerError。"""
 
     class _Fake:
-        def bind_tools(self, _functions):
+        def bind_tools(self, _functions, **_kwargs):
             return self
 
         async def astream(self, _messages):

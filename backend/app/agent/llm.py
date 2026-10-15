@@ -14,18 +14,9 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+# prompt 正文与版本号住在 prompts.py（M9.3 起版本化，改文案必须升 PROMPT_VERSION）
+from app.agent.prompts import SYSTEM_PROMPT
 from app.config import get_settings
-
-SYSTEM_PROMPT = """你是图像编辑工作台里的执行助手。
-
-规则：
-1. 只调用给定的工具，不要自己发明工具或参数。
-2. 需要指定图层时，用**图层名**（例如「候选图 1」）。不要使用任何 id、UUID
-   —— 你不知道它们，猜出来的 id 一定是错的。
-3. 用户没说改哪一层时，不传 layer 参数（服务端会作用于当前选中的图层）。
-4. 一次用户指令只做一件事；用户说了多件事就调用多个工具。
-5. 参数填整数/浮点数，不要填字符串数字。
-"""
 
 
 class PlannerError(RuntimeError):
@@ -69,6 +60,7 @@ def get_chat_model() -> ChatOpenAI:
         api_key=api_key,
         base_url=base_url,
         temperature=get_settings().llm_temperature,
+        stream_usage=True,  # 流式响应也回传 token 用量（M9.3 trace）
     )
 
 
@@ -82,7 +74,7 @@ async def plan_tool_calls(
     返回 `[{name, args}]`。模型没调用任何工具时返回空列表 ——
     这是正常情况（比如用户说的是一句闲聊），由上层决定怎么回应用户。
     """
-    calls = await _plan_stream(instruction, doc_summary, functions, emit=None)
+    calls, _meta = await _plan_stream(instruction, doc_summary, functions, emit=None)
     return calls
 
 
@@ -91,10 +83,12 @@ async def plan_tool_calls_stream(
     doc_summary: str,
     functions: list[dict[str, Any]],
     emit,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """流式版规划：思考 token 经 `emit(kind, delta)` 实时推出去（M9.1）。
 
     emit 是 `async (kind: str, delta: str) -> None`，由上层绑定 run 通道。
+    返回 `(calls, meta)`：meta 带 model 与 token 用量（M9.3 trace 用）——
+    兼容旧桩（只返回 list 的按 meta={} 处理）。
     """
     return await _plan_stream(instruction, doc_summary, functions, emit=emit)
 
@@ -104,13 +98,16 @@ async def _plan_stream(
     doc_summary: str,
     functions: list[dict[str, Any]],
     emit,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     try:
         base_url, _api_key, model = get_settings().require_llm_config()
     except RuntimeError as exc:
         # 缺 Key 也是「规划不了」的一种：同样给人话，而不是落进 500
         raise PlannerError(str(exc)) from exc
 
+    # stream_usage：流式也要拿到 token 用量（M9.3 trace 需要）。
+    # 它是 ChatOpenAI 的模型字段，不是请求参数 —— 放 bind_tools 会被当成
+    # 未知参数发给服务端（中转站直接 400）
     llm = get_chat_model().bind_tools(functions)
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
@@ -147,4 +144,13 @@ async def _plan_stream(
 
     for call in calls:
         await _push("tool_call", f"调用 {call['name']}")
-    return calls
+
+    usage = getattr(merged, "usage_metadata", None) or {}
+    meta = {
+        "model": model,
+        "tokens": {
+            "input": usage.get("input_tokens"),
+            "output": usage.get("output_tokens"),
+        },
+    }
+    return calls, meta

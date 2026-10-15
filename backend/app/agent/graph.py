@@ -20,6 +20,7 @@ LangGraph **静默丢弃**（参考项目踩过的坑，写在这里防再犯）
 from __future__ import annotations
 
 import operator
+import time
 import uuid
 from typing import Annotated, Any
 
@@ -30,10 +31,12 @@ from typing_extensions import TypedDict
 from app.agent import llm as llm_module
 from app.agent import plan as plan_mod
 from app.agent.plan import PlanError
+from app.agent.prompts import PROMPT_VERSION
 from app.services import cot as cot_service
 from app.services import history as history_service
 from app.services import runs as runs_service
 from app.services import tool_exec
+from app.services import traces as traces_service
 
 MAX_REPLANS = 2  # reflect→replan 的上限，超过即优雅降级（DoD ③）
 
@@ -60,19 +63,48 @@ async def plan_node(state: GraphState) -> dict[str, Any]:
     """流式规划 + 六道关卡。已有计划（retry 续跑）时直接跳过。"""
     if state.get("plan"):
         return {}
+    started = time.monotonic()
     emit = _emitter(state["run_id"])
     edit_session = await _session_of(state)
     doc = history_service.LayerDocument.model_validate(edit_session.doc)
-    calls = await llm_module.plan_tool_calls_stream(
+    result = await llm_module.plan_tool_calls_stream(
         state["instruction"], tool_exec.summarize_doc(doc), _function_schemas(), emit
     )
+    # 兼容旧桩（直接返回 list）：新签名返回 (calls, meta)
+    calls, meta = result if isinstance(result, tuple) else (result, {})
     try:
         steps = plan_mod.validate(
             [{"tool": call.get("name"), "args": call.get("args") or {}} for call in calls]
         )
     except PlanError as exc:
         await emit("reflection", str(exc))
+        # 校验失败必须落 trace ——「计划校验拒绝率」的分母不能少这一票
+        await traces_service.record_detached(
+            uuid.UUID(state["run_id"]),
+            uuid.UUID(state["session_id"]),
+            kind="validate",
+            name="plan.validate",
+            status="failed",
+            started=started,
+            prompt_version=PROMPT_VERSION,
+            model=meta.get("model"),
+            tokens=meta.get("tokens"),
+            detail={"error": str(exc), "tool_calls": calls},
+        )
         return {"plan": [], "errors": [str(exc)]}
+
+    await traces_service.record_detached(
+        uuid.UUID(state["run_id"]),
+        uuid.UUID(state["session_id"]),
+        kind="planner",
+        name="plan.stream",
+        status="ok",
+        started=started,
+        prompt_version=PROMPT_VERSION,
+        model=meta.get("model"),
+        tokens=meta.get("tokens"),
+        detail={"steps": len(steps), "tool_calls": calls},
+    )
     return {"plan": steps}
 
 
@@ -112,6 +144,7 @@ async def execute_node(state: GraphState) -> dict[str, Any]:
     if not ready:
         return {"plan": steps}
     step = ready[0]
+    started = time.monotonic()
     await emit("observation", f"开始执行第 {step['id']} 步：{step['tool']}")
 
     async with runs_service.session_scope() as session:
@@ -138,6 +171,23 @@ async def execute_node(state: GraphState) -> dict[str, Any]:
         step["status"] = plan_mod.FAILED
         step["message"] = result.message
         await emit("observation", f"失败：{result.message}")
+
+    # 每步一条 tool span：平均步耗时 / 工具失败率都从这里聚合
+    ok = step["status"] == plan_mod.SUCCEEDED
+    await traces_service.record_detached(
+        uuid.UUID(state["run_id"]),
+        uuid.UUID(state["session_id"]),
+        kind="tool",
+        name=f"execute:{step['tool']}",
+        status="ok" if ok else "failed",
+        started=started,
+        detail={
+            "step_id": step["id"],
+            "message": step.get("message"),
+            "run_id": step.get("run_id"),
+            "async": step["status"] == plan_mod.QUEUED,
+        },
+    )
     return {"plan": steps}
 
 
@@ -181,6 +231,7 @@ async def observe_node(state: GraphState) -> dict[str, Any]:
 
 async def reflect_node(state: GraphState) -> dict[str, Any]:
     """错误回灌：反思失败原因，重规划**剩余**目标（DoD ①）。"""
+    started = time.monotonic()
     emit = _emitter(state["run_id"])
     steps = [dict(step) for step in state["plan"]]
     failed = next(step for step in reversed(steps) if step["status"] == plan_mod.FAILED)
@@ -197,29 +248,51 @@ async def reflect_node(state: GraphState) -> dict[str, Any]:
         f"上一步「{failed['tool']}」失败：{failed.get('message') or '未知原因'}。"
         f"请只输出完成剩余目标所需的后续工具调用。）"
     )
-    calls = await llm_module.plan_tool_calls_stream(
+    result = await llm_module.plan_tool_calls_stream(
         remaining_goal, "（反思重规划）", _function_schemas(), emit
     )
+    calls, meta = result if isinstance(result, tuple) else (result, {})
+    replans = state.get("replans", 0) + 1
+
+    async def _trace_reflect(status: str, detail: dict[str, Any]) -> None:
+        await traces_service.record_detached(
+            uuid.UUID(state["run_id"]),
+            uuid.UUID(state["session_id"]),
+            kind="reflect",
+            name=f"reflect#{replans}",
+            status=status,
+            started=started,
+            prompt_version=PROMPT_VERSION,
+            model=meta.get("model"),
+            tokens=meta.get("tokens"),
+            detail=detail,
+        )
+
     try:
         replanned = plan_mod.validate(
             [{"tool": call.get("name"), "args": call.get("args") or {}} for call in calls]
         )
     except PlanError as exc:
         await emit("reflection", f"重规划仍失败：{exc}")
-        return {"plan": steps, "errors": [str(exc)], "replans": state.get("replans", 0) + 1}
+        await _trace_reflect("failed", {"error": str(exc), "failed_tool": failed["tool"]})
+        return {"plan": steps, "errors": [str(exc)], "replans": replans}
 
     if not replanned:
         await emit("reflection", "重规划没有产出任何步骤，停下交还给人。")
-        return {"plan": steps, "replans": state.get("replans", 0) + 1}
+        await _trace_reflect("failed", {"error": "重规划为空", "failed_tool": failed["tool"]})
+        return {"plan": steps, "replans": replans}
 
     # 丢弃失败步与它的未完成依赖，换成新计划（已完成步保留在前）
     kept = [step for step in steps if step["status"] == plan_mod.SUCCEEDED]
     merged = [*kept, *replanned]
     await emit("observation", f"已重新规划剩余 {len(replanned)} 步")
+    await _trace_reflect(
+        "ok", {"failed_tool": failed["tool"], "replanned_steps": len(replanned)}
+    )
     return {
         "plan": merged,
-        "replans": state.get("replans", 0) + 1,
-        "errors": [f"第 {state.get('replans', 0) + 1} 次重规划"],
+        "replans": replans,
+        "errors": [f"第 {replans} 次重规划"],
     }
 
 
