@@ -17,7 +17,7 @@
  * 与缩放同级 —— 选区 overlay 不进文档，改图后随 revision 自动失效。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Popover, Result, Segmented, Skeleton, Slider, Tooltip } from 'antd'
@@ -195,6 +195,13 @@ export default function EditorPage() {
   }, [activeRun, runStream, runTool, queryClient, sessionId])
 
   const queueRun = (runId: string, tool: string) => setActiveRun({ id: runId, tool })
+
+  /** 计划卡片里任何步骤落地后：文档/历史/选区都可能变了 */
+  const onPlanChanged = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['session', sessionId] })
+    void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
+    void queryClient.invalidateQueries({ queryKey: ['selection', sessionId] })
+  }, [queryClient, sessionId])
 
   // asset_id -> 预签名地址。必须 useMemo：useLoadedImages 靠引用变化去重
   const urlMap = useMemo(() => {
@@ -441,7 +448,7 @@ export default function EditorPage() {
       <div className="flex min-h-0 flex-1">
         {/* 左：对话 */}
         <section className="border-line bg-paper w-72 shrink-0 border-r">
-          <ChatPanel sessionId={sessionId} onQueuedRun={queueRun} />
+          <ChatPanel sessionId={sessionId} onQueuedRun={queueRun} onChanged={onPlanChanged} />
         </section>
 
         {/* 中：画布 + 候选图条 */}
