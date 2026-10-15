@@ -212,6 +212,22 @@ export default function EditorPage() {
     return topmostVisibleImageLayer(data.doc) ?? null
   }, [data, selectedLayerId])
 
+  /**
+   * 对比模式的作用对象：最上层的可见图像层（通常是最近一次编辑的结果）。
+   * ⚠️ 必须留在早退 return 之前的 hooks 区 —— hook 顺序在两次渲染之间
+   * 不允许变化（React 会直接抛 Fatal Error）。
+   */
+  const topImageLayerId = useMemo(() => {
+    const layers = data?.doc.layers
+    if (!layers) return null
+    for (let i = layers.length - 1; i >= 0; i--) {
+      const layer = layers[i]
+      if (layer.visible && layer.type === 'image') return layer.id
+    }
+    return null
+  }, [data])
+  const hiddenLayerIds = compare && topImageLayerId ? [topImageLayerId] : null
+
   function invoke(name: string, params: Record<string, unknown>) {
     runTool.mutate({ name, params })
   }
@@ -263,16 +279,6 @@ export default function EditorPage() {
 
   const doc = data.doc
   const selectionData = selection.data ?? null
-
-  /** 对比模式的作用对象：最上层的可见图像层（通常是最近一次编辑的结果）。 */
-  const topImageLayerId = useMemo(() => {
-    for (let i = doc.layers.length - 1; i >= 0; i--) {
-      const layer = doc.layers[i]
-      if (layer.visible && layer.type === 'image') return layer.id
-    }
-    return null
-  }, [doc.layers])
-  const hiddenLayerIds = compare && topImageLayerId ? [topImageLayerId] : null
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
