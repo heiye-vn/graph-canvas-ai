@@ -295,6 +295,11 @@ export default function CanvasStage({
       {loading && (
         <span className="text-faint absolute top-3 left-3 text-xs">素材加载中…</span>
       )}
+      {selectionBusy && (
+        <span className="border-line bg-paper text-muted absolute top-3 right-3 rounded-card border px-2 py-1 text-xs shadow-sm">
+          选区计算中…
+        </span>
+      )}
     </div>
   )
 }

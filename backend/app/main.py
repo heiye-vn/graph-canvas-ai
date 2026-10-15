@@ -44,6 +44,22 @@ async def lifespan(app: FastAPI):
     await run_in_threadpool(storage.ensure_bucket)
     logger.info("对象存储就绪：bucket=%s", storage.bucket_name())
 
+    # SAM 预热：首次点选本要承担十几秒的模型加载。后台跑、不阻塞启动；
+    # 模型缺失/下载失败只打日志 —— auto 模式点选时还有画圆兜底
+    if settings.matting_provider in ("auto", "sam"):
+        import asyncio
+
+        from app.edits.segment import warm_session
+
+        async def _preheat_sam() -> None:
+            try:
+                await run_in_threadpool(warm_session)
+                logger.info("SAM 会话预热完成，点选即点即用")
+            except Exception as exc:  # noqa: BLE001 - 预热失败不阻塞启动
+                logger.warning("SAM 预热失败（首次点选将现场加载）：%s", exc)
+
+        app.state.sam_preheat = asyncio.create_task(_preheat_sam())
+
     try:
         yield
     finally:

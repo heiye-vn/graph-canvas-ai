@@ -72,6 +72,23 @@ def _sam_mask(
     return _decode(session, embedding, prompt)
 
 
+def warm_session() -> None:
+    """进程启动预热：把 encoder/decoder 的 onnx 会话建好。
+
+    首次点选的十几秒是模型加载，不是分割本身 —— 这段成本不该由
+    第一个点选的用户承担。auto 模式下失败只降级，不让启动挂掉。
+    """
+    settings = get_settings()
+    if settings.matting_provider == "circle":
+        return
+    try:
+        _sam_session()
+    except Exception:
+        if settings.matting_provider == "sam":
+            raise
+        # auto：预热失败不致命，点选时还有画圆兜底
+
+
 def _sam_session():
     global _sam
     with _lock:
