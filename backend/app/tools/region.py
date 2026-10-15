@@ -54,21 +54,31 @@ async def _submit(
 ) -> QueuedOutcome:
     if ctx.db is None:  # pragma: no cover - 提交路径必带 db
         raise ToolError("提交环境异常，请重试", code="no_db")
-    if params.mask_asset_id is None:
-        from app.services import selections
 
-        stored = await selections.get(ctx.session_id, ctx.pinned.get("revision", -1))
+    # revision 的唯一权威来源是会话记录本身。
+    # 界面/模型都不会传这个隐藏字段 —— 拿请求参数当 revision 比对，
+    # 永远对不上，选区就「永远不存在」（这正是第一版踩的坑）。
+    from app.models import EditSession
+    from app.services import selections
+
+    record = await ctx.db.get(EditSession, ctx.session_id)
+    if record is None:
+        raise ToolError("编辑会话不存在", code="no_session")
+
+    mask_asset_id = params.mask_asset_id
+    if mask_asset_id is None:
+        stored = await selections.get(ctx.session_id, record.revision)
         if not stored:
             raise ToolError("请先点选或涂抹要修改的区域", code="no_selection")
-        params.mask_asset_id = stored["mask_asset_id"]
+        mask_asset_id = stored["mask_asset_id"]
 
     run = ToolRun(
         user_id=ctx.user_id,
         tool=tool,
         params={
             "prompt": getattr(params, "prompt", "") or "",
-            "mask_asset_id": params.mask_asset_id,
-            "revision": params.revision,
+            "mask_asset_id": mask_asset_id,
+            "revision": record.revision,
             "session_id": str(ctx.session_id),
         },
         session_id=ctx.session_id,

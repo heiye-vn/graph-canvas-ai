@@ -170,3 +170,33 @@ def test_erase_region_without_selection_fails_clean(client: TestClient, user: di
     )
     assert r.status_code == 422
     assert "点选" in r.json()["detail"]
+
+
+def test_erase_region_submits_with_existing_selection(client: TestClient, user: dict):
+    """有选区时调用局部消除：提交成功并返回 run_id（回归：revision 权威在服务端）。
+
+    第一版的 bug：提交路径拿请求参数里的 revision 比对选区 —— 界面根本
+    不传这个隐藏字段，导致「明明有选区却提示先选区」。
+    """
+    session = make_session(client, user)
+    made = client.post(
+        f"/api/edit-sessions/{session['id']}/selection",
+        json={
+            "revision": session["revision"],
+            "strokes": [[{"x": 0.3, "y": 0.3}, {"x": 0.5, "y": 0.5}]],
+        },
+        headers=auth(user),
+    )
+    assert made.status_code == 200
+
+    r = client.post(
+        "/api/tools/erase_region/invoke",
+        json={"session_id": session["id"], "params": {}},
+        headers=auth(user),
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["run_id"], "排队型工具必须返回 run_id"
+    assert "已提交" in body["message"]
+    # 会话 revision 未被排队型工具改变（文档没动）
+    assert body["session"]["revision"] == session["revision"]
