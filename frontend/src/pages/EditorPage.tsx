@@ -27,7 +27,9 @@ import {
   ExportOutlined,
   MinusOutlined,
   PlusOutlined,
+  SwapOutlined,
 } from '@ant-design/icons'
+import { message } from 'antd'
 import type Konva from 'konva'
 
 import {
@@ -108,6 +110,8 @@ export default function EditorPage() {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('off')
   const [brushRadius, setBrushRadius] = useState(0.03)
   const [activeRun, setActiveRun] = useState<{ id: string; tool: string } | null>(null)
+  // 对比模式：临时隐藏最上层的图像层，看编辑前的样子（视图状态，不进文档）
+  const [compare, setCompare] = useState(false)
   const stageRef = useRef<Konva.Stage | null>(null)
 
   const data = session.data as SessionOut | undefined
@@ -166,13 +170,19 @@ export default function EditorPage() {
             name: QUEUED_TOOL_LABEL[activeRun.tool] ?? '编辑结果',
           },
         },
-        { onSettled: () => {
-          adoptingRef.current = false
-          setActiveRun(null)
-        } },
+        {
+          onSuccess: () =>
+            message.success('局部编辑完成，已加入画布。顶栏「对比」可查看编辑前的样子'),
+          onSettled: () => {
+            adoptingRef.current = false
+            setActiveRun(null)
+          },
+        },
       )
     }
   }, [activeRun, runStream, runTool])
+
+  const queueRun = (runId: string, tool: string) => setActiveRun({ id: runId, tool })
 
   // asset_id -> 预签名地址。必须 useMemo：useLoadedImages 靠引用变化去重
   const urlMap = useMemo(() => {
@@ -254,6 +264,16 @@ export default function EditorPage() {
   const doc = data.doc
   const selectionData = selection.data ?? null
 
+  /** 对比模式的作用对象：最上层的可见图像层（通常是最近一次编辑的结果）。 */
+  const topImageLayerId = useMemo(() => {
+    for (let i = doc.layers.length - 1; i >= 0; i--) {
+      const layer = doc.layers[i]
+      if (layer.visible && layer.type === 'image') return layer.id
+    }
+    return null
+  }, [doc.layers])
+  const hiddenLayerIds = compare && topImageLayerId ? [topImageLayerId] : null
+
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* ---- 顶栏 ---- */}
@@ -320,6 +340,17 @@ export default function EditorPage() {
               />
             </Tooltip>
           )}
+          <Tooltip title="隐藏最上层图像，对比编辑前后效果">
+            <Button
+              size="small"
+              type={compare ? 'primary' : 'text'}
+              icon={<SwapOutlined />}
+              onClick={() => setCompare((prev) => !prev)}
+              aria-label="对比编辑前后"
+            >
+              对比
+            </Button>
+          </Tooltip>
 
           <Tooltip title="缩小">
             <Button
@@ -381,11 +412,18 @@ export default function EditorPage() {
       <div className="flex min-h-0 flex-1">
         {/* 左：对话 */}
         <section className="border-line bg-paper w-72 shrink-0 border-r">
-          <ChatPanel sessionId={sessionId} />
+          <ChatPanel sessionId={sessionId} onQueuedRun={queueRun} />
         </section>
 
         {/* 中：画布 + 候选图条 */}
         <section className="flex min-w-0 flex-1 flex-col">
+          {selectionMode !== 'off' && (
+            <div className="bg-brand-soft text-ink mx-3 mt-2 shrink-0 rounded-card px-3 py-1.5 text-xs">
+              {selectionMode === 'point'
+                ? '点选模式：在画面上单击要编辑的物体（可多点几次），然后到右侧选「局部消除 / 局部替换」执行'
+                : '笔刷模式：按住鼠标在画面上涂抹要编辑的区域，然后到右侧选「局部消除 / 局部替换」执行'}
+            </div>
+          )}
           <div className="bg-soft relative min-h-0 flex-1 overflow-auto p-4">
             <div className="flex min-h-full items-start justify-center">
               <CanvasStage
@@ -400,6 +438,7 @@ export default function EditorPage() {
                 maskUrl={selectionData?.mask.url ?? null}
                 markers={selectionData?.markers ?? []}
                 selectionBusy={updateSelection.isPending}
+                hiddenLayerIds={hiddenLayerIds}
                 onPointClick={(point) =>
                   updateSelection.mutate({
                     revision: data.revision,
@@ -462,7 +501,12 @@ export default function EditorPage() {
 
           <section>
             <h2 className="text-muted mb-2 text-xs font-medium">工具参数</h2>
-            <ToolPanel sessionId={sessionId} selected={toolName} onSelect={setToolName} />
+            <ToolPanel
+              sessionId={sessionId}
+              selected={toolName}
+              onSelect={setToolName}
+              onQueuedRun={queueRun}
+            />
           </section>
 
           <section>

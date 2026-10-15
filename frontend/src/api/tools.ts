@@ -37,6 +37,8 @@ export interface StepResult {
   message: string
   /** 这一步是否真的改了文档（false = 记了历史但画布没动） */
   changed: boolean
+  /** 排队型工具提交出的任务 id（进度流凭它订阅） */
+  run_id?: string | null
 }
 
 export interface StepOutcome {

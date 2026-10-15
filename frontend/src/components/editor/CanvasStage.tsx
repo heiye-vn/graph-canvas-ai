@@ -117,6 +117,7 @@ export default function CanvasStage({
   maskUrl = null,
   markers = [],
   selectionBusy = false,
+  hiddenLayerIds = null,
   onPointClick,
   onStrokeEnd,
 }: {
@@ -135,6 +136,8 @@ export default function CanvasStage({
   maskUrl?: string | null
   markers?: SelectionMarker[]
   selectionBusy?: boolean
+  /** 对比模式：临时隐藏这些图层（视图状态，不进文档、不影响导出以外的一切） */
+  hiddenLayerIds?: string[] | null
   /** 点选模式下的单击回调（归一化坐标） */
   onPointClick?: (point: NormalizedPoint) => void
   /** 笔刷模式下一笔结束的回调（归一化坐标序列） */
@@ -174,7 +177,8 @@ export default function CanvasStage({
   }, [selectionMode])
 
   // layers 数组从下到上，直接顺序渲染即可（不需要翻转 —— 翻转是为了给面板看）
-  const drawable = doc.layers.filter((layer) => layer.visible)
+  const hidden = useMemo(() => new Set(hiddenLayerIds ?? []), [hiddenLayerIds])
+  const drawable = doc.layers.filter((layer) => layer.visible && !hidden.has(layer.id))
 
   function pointerNormalized(): NormalizedPoint | null {
     const stage = stageRef?.current

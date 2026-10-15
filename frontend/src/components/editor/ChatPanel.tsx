@@ -30,10 +30,13 @@ const SUGGESTIONS = ['把图变亮一点', '去掉背景', '加一行标题文�
 export default function ChatPanel({
   sessionId,
   onMutated,
+  onQueuedRun,
 }: {
   sessionId: string
   /** 执行成功后通知外层（画布文档变了） */
   onMutated?: () => void
+  /** Agent 触发了排队型工具（局部编辑等）：外层凭 run_id 挂进度条并自动采用 */
+  onQueuedRun?: (runId: string, tool: string) => void
 }) {
   const queryClient = useQueryClient()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -53,6 +56,9 @@ export default function ChatPanel({
       // 否则用户会以为「自动帮我做的那些退不回去」
       void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
       onMutated?.()
+      for (const step of outcome.steps) {
+        if (step.run_id) onQueuedRun?.(step.run_id, step.tool)
+      }
       setMessages((prev) => [
         ...prev,
         {

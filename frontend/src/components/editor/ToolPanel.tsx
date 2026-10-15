@@ -19,11 +19,14 @@ export default function ToolPanel({
   sessionId,
   selected = null,
   onSelect,
+  onQueuedRun,
 }: {
   sessionId: string
   /** 外部（快捷工具条）选中的工具；不传则用面板自己的下拉 */
   selected?: string | null
   onSelect?: (name: string) => void
+  /** 排队型工具（局部编辑等）提交成功：外层凭 run_id 挂进度条并自动采用 */
+  onQueuedRun?: (runId: string, tool: string) => void
 }) {
   const queryClient = useQueryClient()
   const { data, isLoading } = useQuery({ queryKey: ['tools'], queryFn: listTools })
@@ -39,11 +42,20 @@ export default function ToolPanel({
     [data, toolName],
   )
 
+  // agent_hidden 字段（mask_asset_id / revision 这类内部 id）**不渲染表单**：
+  // 它们由服务端按会话回填，显示成两个锁住的空输入框只会让用户困惑
+  // 「这个空框要我填什么」。表单只出现用户真正需要填的东西。
+  const visibleParams = useMemo(
+    () => (tool?.params ?? []).filter((param) => !param.agent_hidden),
+    [tool],
+  )
+
   const invoke = useMutation({
     mutationFn: () => invokeTool(tool!.name, sessionId, values),
     onSuccess: (result) => {
       queryClient.setQueryData(['session', sessionId], result.session)
       void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
+      if (result.run_id) onQueuedRun?.(result.run_id, result.tool)
     },
   })
 
@@ -69,7 +81,16 @@ export default function ToolPanel({
 
       {tool && (
         <div className="mt-4 space-y-3">
-          {tool.params.map((param) => (
+          {visibleParams.length === 0 && (
+            <p className="text-faint m-0 text-xs">
+              这个工具不需要填参数
+              {tool.name.startsWith('erase_') || tool.name === 'replace_region'
+                ? '，作用范围 = 当前选区（顶栏「点选 / 笔刷」生成）'
+                : ''}
+              。
+            </p>
+          )}
+          {visibleParams.map((param) => (
             <ParamField
               key={param.name}
               param={param}
