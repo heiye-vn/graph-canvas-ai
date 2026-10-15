@@ -1,19 +1,14 @@
-"""多步计划的执行引擎（M8/M9.1）—— 规划 / 确认 / 取消 / 重试 / 推进。
+"""Agent 对话轮服务（M9.2）—— LangGraph 图驱动，REST 契约与 M8 完全一致。
 
-状态流转（整轮）：planning → awaiting_confirm → running → succeeded/failed/cancelled。
-步骤状态存在 plan JSONB 里，由 agent/plan.py 的状态机函数统一裁决；
-本模块只负责「把该跑的步骤跑起来」和「把跑完的状态写回去」。
+职责只剩三件：
+    1. draft：占位先行（planning），前端拿到 run_id 就能订阅 CoT
+    2. 图驱动：astream 逐节点把 plan 增量写回 agent_runs（刷新现场永远干净）
+    3. resume 入口：确认 / 排队步回调 / 重试 —— 全部是同一个
+       Command(resume) 机制，状态由 PostgresSaver 落库（DoD ② 的根基）
 
-三条硬规矩：
-    1. 同步步走 apply_tool_calls —— 与手动执行同一条路，撤销栈才完整
-    2. 每个同步步一个事务，跑完立即落库 —— 「上一步完了、下一步还没
-       开始」的中间态对外永远不可见（DoD ④ 的根基）
-    3. 排队步投递后本轮自然停住，等对应 ToolRun 完成后由
-       continue_after_tool_run 接着推进 —— 前端刷新也能从库里恢复现场
-
-M9.1：规划改为「占位先行 + 后台流式」——draft() 秒回 planning 占位，
-_plan_and_fill 在 API 进程内跑，思考 token 经 services/cot.py 实时推送；
-执行期每步前后也发 observation，同一条 cot 通道。
+状态来源分两层：步骤状态机仍在 plan JSONB（agent/plan.py 的纯函数），
+图的推进/中断/恢复由 checkpointer 负责 —— 双写但单一真相源是 plan JSONB
+（前端契约），checkpointer 是图的执行现场。
 """
 
 from __future__ import annotations
@@ -24,13 +19,14 @@ import uuid
 from typing import Any
 
 from fastapi import HTTPException, status
+from langgraph.types import Command
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent import llm as llm_module
 from app.agent import plan as plan_mod
-from app.agent.plan import PlanError
-from app.models import AgentRun, EditSession, ToolRun
+from app.agent.checkpointer import get_checkpointer
+from app.agent.graph import CONFIRM, build_graph
+from app.models import AgentRun, ToolRun
 from app.models.agent_run import (
     AWAITING_CONFIRM,
     CANCELLED,
@@ -38,34 +34,24 @@ from app.models.agent_run import (
     RUNNING,
     TERMINAL,
 )
-from app.models.run import CANCELLED as RUN_CANCELLED
-from app.models.run import FAILED as RUN_FAILED
-from app.models.run import SUCCEEDED as RUN_SUCCEEDED
 from app.schemas.events import DoneEvent
-from app.services import cot as cot_service
-from app.services import events, tool_exec
-from app.services import history as history_service
+from app.services import events
 from app.services import runs as runs_service
 
 logger = logging.getLogger("graph-canvas-ai.agent")
-
-# ToolRun 的终态 → 计划步骤状态（字符串一致，显式映射防漂移）
-_RUN_TO_STEP = {
-    RUN_SUCCEEDED: plan_mod.SUCCEEDED,
-    RUN_FAILED: plan_mod.FAILED,
-    RUN_CANCELLED: plan_mod.CANCELED,
-}
 
 
 async def draft(
     session: AsyncSession, *, user_id: uuid.UUID, session_id: uuid.UUID, instruction: str
 ) -> AgentRun:
-    """预创建一轮「规划中」的占位，返回后立即由后台任务流式规划。
+    """预创建一轮「规划中」的占位，返回后立即由后台任务驱动图。
 
     占位先行是 CoT 实时性的前提：前端拿到 run_id 就能订阅
     /events/agent/{id}，模型边想边推，一个 token 都不用等规划结束。
     """
-    await sessions_get(session, user_id, session_id)  # 归属校验
+    from app.services import sessions as sessions_service
+
+    await sessions_service.get_edit_session(session, user_id, session_id)  # 归属校验
     turn = AgentRun(
         user_id=user_id,
         session_id=session_id,
@@ -77,77 +63,11 @@ async def draft(
     await session.commit()
     await session.refresh(turn)
 
-    # API 进程内后台规划：请求立刻返回，token 走 Redis 推给订阅者。
-    # 规划只有几秒，不值得过 ARQ；但必须用独立会话，不能复用请求级 session
-    task = asyncio.create_task(_plan_and_fill(turn.id))
-    turn.__dict__["_plan_task"] = task  # 仅持引用防 GC，无业务含义
+    # API 进程内后台驱动图：请求立刻返回，token 走 Redis 推给订阅者。
+    # 必须用独立会话（请求级 session 会随响应关闭）
+    task = asyncio.create_task(_drive(turn.id))
+    turn.__dict__["_graph_task"] = task  # 仅持引用防 GC，无业务含义
     return turn
-
-
-async def _plan_and_fill(run_id: uuid.UUID) -> None:
-    """后台流式规划：思考 token 经 cot 通道实时推送，结束后更新占位轮。"""
-    async with runs_service.session_scope() as session:
-        turn = await session.get(AgentRun, run_id)
-        if turn is None or turn.status != PLANNING:
-            return
-        emit = _emitter(turn.id)
-
-        reply, steps, error = "", [], None
-        try:
-            edit_session = await sessions_get(session, turn.user_id, turn.session_id)
-            doc = history_service.LayerDocument.model_validate(edit_session.doc)
-            calls = await llm_module.plan_tool_calls_stream(
-                turn.instruction,
-                tool_exec.summarize_doc(doc),
-                _function_schemas(),
-                emit,
-            )
-            # planner 吐的是 {name, args}（function calling 惯例），归一成计划的 {tool, params}
-            steps = plan_mod.validate(
-                [{"tool": call.get("name"), "args": call.get("args") or {}} for call in calls]
-            )
-        except llm_module.PlannerError as exc:
-            error = str(exc)
-            steps = []
-        except PlanError as exc:
-            error = str(exc)
-            steps = []
-        except Exception:  # noqa: BLE001 - 规划层的任何意外都转成人话，绝不 500
-            logger.exception("计划规划异常 run_id=%s", run_id)
-            error = "规划失败，请重试"
-            steps = []
-
-        if error:
-            turn.status = "failed"
-            await emit("reflection", error)
-        elif plan_mod.needs_confirm(steps):
-            turn.status = AWAITING_CONFIRM
-            reply = "将按以下步骤执行，确认后开始。"
-            await emit("observation", "计划已就绪，等待确认")
-        elif steps:
-            turn.status = RUNNING
-            await emit("observation", "单步计划，直接执行")
-        else:
-            turn.status = "succeeded"
-            reply = "这句话没有对应到可执行的操作，换一种说法试试。"
-            await emit("observation", reply)
-
-        turn.plan = steps
-        turn.reply = reply
-        turn.error = error
-        await session.commit()
-        await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
-
-        if turn.status == RUNNING:
-            turn = await _advance(session, turn)
-            await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
-
-
-def _emitter(run_id: uuid.UUID):
-    async def emit(kind: str, delta: str) -> None:
-        await cot_service.emit(run_id, kind, delta)
-
-    return emit
 
 
 async def confirm(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
@@ -157,7 +77,9 @@ async def confirm(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUI
     turn.status = RUNNING
     turn.reply = turn.reply or "已确认，开始执行。"
     await session.commit()
-    return await _advance(session, turn)
+    await _drive(run_id, resume={"action": CONFIRM})
+    await session.refresh(turn)
+    return turn
 
 
 async def cancel(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
@@ -182,7 +104,11 @@ async def cancel(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID
 
 
 async def retry_step(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
-    """从最后一个失败步重试：只重置它自己，依赖它的后续会跟着状态机自然解锁。"""
+    """从失败处续跑：重置失败步，以新输入重启同一线程（用户已确认过，不再设卡）。
+
+    反思重规划（reflect）是图内的**自动**行为；这个端点是**人工**重试 ——
+    自动重试到上限（MAX_REPLANS）降级为 failed 后，就轮到它接手。
+    """
     turn = await _get(session, user_id, run_id)
     failed = next(
         (step for step in reversed(turn.plan) if step["status"] == plan_mod.FAILED), None
@@ -192,90 +118,129 @@ async def retry_step(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.
     failed["run_id"] = None
     failed["message"] = None
     failed["status"] = plan_mod.PENDING
-    turn.plan = [dict(step) for step in turn.plan]
+    patched_plan = [dict(step) for step in turn.plan]
+    turn.plan = patched_plan
     turn.status = RUNNING
     turn.error = None
     await session.commit()
-    return await _advance(session, turn)
+
+    await _drive(
+        run_id,
+        input_state={
+            "plan": patched_plan,
+            "approved": True,  # 人工重试本身就是明确指令，不再设确认卡
+            "replans": 0,
+        },
+    )
+    await session.refresh(turn)
+    return turn
 
 
 async def continue_after_tool_run(
     session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID, tool_run_id: uuid.UUID
 ) -> AgentRun:
-    """某个排队步的 ToolRun 结束了：把结果写回步骤，然后继续推进。"""
+    """某个排队步的 ToolRun 结束了：resume 图，observe 节点核对终态后继续推进。"""
     turn = await _get(session, user_id, run_id)
     tool_run = await runs_service.get_run(session, user_id, tool_run_id)
+    if not any(step.get("run_id") == str(tool_run.id) for step in turn.plan):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, detail="这个任务不属于该计划"
+        )
 
-    steps = [dict(step) for step in turn.plan]
-    target = next((step for step in steps if step.get("run_id") == str(tool_run.id)), None)
-    if target is None:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, detail="这个任务不属于该计划")
-    target["status"] = _RUN_TO_STEP.get(tool_run.status, plan_mod.FAILED)
-    if tool_run.error:
-        target["message"] = tool_run.error.get("message")
-    elif tool_run.status == RUN_SUCCEEDED:
-        target["message"] = "完成"
-    turn.plan = steps
-    await session.commit()
-
-    if turn.status == RUNNING:
-        return await _advance(session, turn)
-    return turn
-
-
-# ------------------------------------------------------------------ 推进
-
-
-async def _advance(session: AsyncSession, turn: AgentRun) -> AgentRun:
-    """把当前所有 ready 的步骤跑掉；排队步投出去就停，等回调再推进。"""
-    emit = _emitter(turn.id)
-    steps = [dict(step) for step in turn.plan]
-    progressed = True
-    while progressed:
-        progressed = False
-        for step in plan_mod.ready(steps):
-            await emit("observation", f"开始执行第 {step['id']} 步：{step['tool']}")
-            updated, results = await history_service.apply_tool_calls(
-                session,
-                user_id=turn.user_id,
-                session_id=turn.session_id,
-                calls=[history_service.ToolCall(name=step["tool"], params=step["params"])],
-            )
-            result = results[0] if results else None
-            if result is None:
-                step["status"] = plan_mod.FAILED
-                step["message"] = "步骤执行失败"
-                await emit("observation", "失败：步骤执行失败")
-                progressed = True
-            elif result.run_id:
-                # 排队步：run 已由 apply_tool_calls 投递，等 ToolRun 终态回调
-                step["run_id"] = str(result.run_id)
-                step["status"] = plan_mod.QUEUED
-                step["message"] = result.message
-                await emit("observation", f"已提交后台任务：{result.message}")
-            elif result.ok:
-                step["status"] = plan_mod.SUCCEEDED
-                step["message"] = result.message
-                await emit("observation", f"完成：{result.message}")
-                progressed = True
-            else:
-                step["status"] = plan_mod.FAILED
-                step["message"] = result.message
-                await emit("observation", f"失败：{result.message}")
-                progressed = True
-            # 步骤级变更立即落库（apply_tool_calls 已提交文档/历史，这里补计划本身）
-            turn.plan = [dict(item) for item in steps]
-            turn.status = RUNNING
-            await session.commit()
-            if step["status"] == plan_mod.QUEUED:
-                progressed = False  # 异步步：本轮到此为止
-                break
-
-    turn.plan = [dict(item) for item in steps]
-    turn.status = plan_mod.settle(steps)
-    await session.commit()
+    await _drive(run_id, resume={"action": "tool_done", "run_id": str(tool_run.id)})
     await session.refresh(turn)
     return turn
+
+
+# ------------------------------------------------------------------ 图驱动
+
+
+async def _drive(
+    run_id: uuid.UUID,
+    *,
+    resume: dict[str, Any] | None = None,
+    input_state: dict[str, Any] | None = None,
+) -> None:
+    """驱动一次图执行（新起 / resume / 带输入重启），plan 增量实时落回 agent_runs。
+
+    astream(stream_mode="updates") 逐节点产出增量：plan 一变就落库 ——
+    「上一步已完成、下一步未开始」的中间现场对外永远可见（DoD ④ 延续）。
+    """
+    async with runs_service.session_scope() as session:
+        turn = await session.get(AgentRun, run_id)
+        if turn is None or turn.status in TERMINAL:
+            return
+        checkpointer = await get_checkpointer()
+        graph = build_graph().compile(checkpointer=checkpointer)
+        config = {"configurable": {"thread_id": str(run_id)}}
+
+        state_acc: dict[str, Any] = {}
+        if resume is not None:
+            stream = graph.astream(Command(resume=resume), config, stream_mode="updates")
+        else:
+            base = dict(input_state or {})
+            base.setdefault(
+                "run_id", str(run_id)
+            )
+            base.setdefault("user_id", str(turn.user_id))
+            base.setdefault("session_id", str(turn.session_id))
+            base.setdefault("instruction", turn.instruction)
+            base.setdefault("plan", list(turn.plan or []))
+            base.setdefault("errors", [])
+            base.setdefault("replans", 0)
+            base.setdefault("approved", False)
+            stream = graph.astream(base, config, stream_mode="updates")
+
+        interrupted_kind: str | None = None
+        try:
+            # ⚠️ stream_mode="updates" 的增量是 {节点名: {channel: 值}}，
+            # 不是扁平的 channel 字典 —— 拍平前先剥节点名。
+            async for update in stream:
+                if not update:
+                    continue
+                for key, delta in update.items():
+                    if key == "__interrupt__":
+                        for one in delta or ():
+                            value = getattr(one, "value", None) or {}
+                            interrupted_kind = value.get("kind")
+                        continue
+                    if not isinstance(delta, dict):
+                        continue
+                    state_acc.update(delta)
+                    if isinstance(delta.get("plan"), list):
+                        turn.plan = delta["plan"]
+                        turn.status = RUNNING
+                        await session.commit()
+        except Exception as exc:  # noqa: BLE001 - 图内任何异常都转成失败轮，绝不把占位挂死
+            logger.exception("图执行异常 run_id=%s", run_id)
+            turn.status = "failed"
+            turn.error = str(exc) or "执行失败，可重试或取消"
+            await session.commit()
+            await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
+            return
+
+        final_plan = state_acc.get("plan", list(turn.plan or []))
+        if interrupted_kind == CONFIRM:
+            turn.status = AWAITING_CONFIRM
+            turn.reply = turn.reply or "将按以下步骤执行，确认后开始。"
+        elif interrupted_kind is not None:
+            turn.status = RUNNING  # wait_run：排队步在飞，不算结束
+        else:
+            turn.status = plan_mod.settle(final_plan)
+            # 规划被六道关卡拦下（空计划 + errors）：必须落到 failed，
+            # settle 对空计划只能给 succeeded —— 人话在 errors 里
+            if not final_plan and state_acc.get("errors"):
+                turn.status = "failed"
+            if turn.status == "failed":
+                turn.error = _last_error(state_acc) or "执行失败，可重试或取消"
+        turn.plan = final_plan
+        await session.commit()
+        await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
+
+
+def _last_error(state_acc: dict[str, Any]) -> str | None:
+    errors = state_acc.get("errors") or []
+    return str(errors[-1]) if errors else None
 
 
 async def _get(session: AsyncSession, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
@@ -301,17 +266,3 @@ async def list_for_session(
         .limit(limit)
     )
     return list(reversed(result.all()))
-
-
-def _function_schemas() -> list[dict[str, Any]]:
-    from app.tools.registry import function_schemas
-
-    return function_schemas()
-
-
-async def sessions_get(
-    session: AsyncSession, user_id: uuid.UUID, session_id: uuid.UUID
-) -> EditSession:
-    from app.services import sessions as sessions_service
-
-    return await sessions_service.get_edit_session(session, user_id, session_id)

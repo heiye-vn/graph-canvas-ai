@@ -37,6 +37,7 @@ agent = [
     "langchain-openai>=0.2",
     "langgraph>=0.2",
     "langgraph-checkpoint-postgres>=2.0",
+    "psycopg[binary]>=3.1",
 ]
 cv = [
     "numpy>=2.1",

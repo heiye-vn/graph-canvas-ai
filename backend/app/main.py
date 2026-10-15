@@ -9,10 +9,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import sys
 from contextlib import asynccontextmanager
 from os import getenv
 from pathlib import Path
+
+if sys.platform == "win32":
+    # psycopg3 的 async 模式在 Windows 上必须 Selector 事件循环
+    # （默认 Proactor 不兼容 —— 会直接 InterfaceError 拒连）。
+    # 必须在任何事件循环创建之前设置，所以放在模块顶层。
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
@@ -76,7 +84,11 @@ async def lifespan(app: FastAPI):
         await close_pool()
         await close_redis()
         await dispose_engine()
-        logger.info("已关闭数据库连接池与消息通道")
+
+        from app.agent.checkpointer import close_checkpointer
+
+        await close_checkpointer()
+        logger.info("已关闭数据库连接池、消息通道与 LangGraph checkpointer")
 
 
 def create_app() -> FastAPI:
