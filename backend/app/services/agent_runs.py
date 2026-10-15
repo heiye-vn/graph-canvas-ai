@@ -1,6 +1,6 @@
-"""多步计划的执行引擎（M8）—— 确认 / 取消 / 重试 / 推进，全部收在一个外壳里。
+"""多步计划的执行引擎（M8/M9.1）—— 规划 / 确认 / 取消 / 重试 / 推进。
 
-状态流转（整轮）：awaiting_confirm → running → succeeded/failed/cancelled。
+状态流转（整轮）：planning → awaiting_confirm → running → succeeded/failed/cancelled。
 步骤状态存在 plan JSONB 里，由 agent/plan.py 的状态机函数统一裁决；
 本模块只负责「把该跑的步骤跑起来」和「把跑完的状态写回去」。
 
@@ -10,10 +10,15 @@
        开始」的中间态对外永远不可见（DoD ④ 的根基）
     3. 排队步投递后本轮自然停住，等对应 ToolRun 完成后由
        continue_after_tool_run 接着推进 —— 前端刷新也能从库里恢复现场
+
+M9.1：规划改为「占位先行 + 后台流式」——draft() 秒回 planning 占位，
+_plan_and_fill 在 API 进程内跑，思考 token 经 services/cot.py 实时推送；
+执行期每步前后也发 observation，同一条 cot 通道。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -26,17 +31,24 @@ from app.agent import llm as llm_module
 from app.agent import plan as plan_mod
 from app.agent.plan import PlanError
 from app.models import AgentRun, EditSession, ToolRun
-from app.models.agent_run import AWAITING_CONFIRM, CANCELLED, RUNNING, TERMINAL
+from app.models.agent_run import (
+    AWAITING_CONFIRM,
+    CANCELLED,
+    PLANNING,
+    RUNNING,
+    TERMINAL,
+)
 from app.models.run import CANCELLED as RUN_CANCELLED
 from app.models.run import FAILED as RUN_FAILED
 from app.models.run import SUCCEEDED as RUN_SUCCEEDED
+from app.schemas.events import DoneEvent
+from app.services import cot as cot_service
+from app.services import events, tool_exec
 from app.services import history as history_service
 from app.services import runs as runs_service
-from app.services import tool_exec
 
 logger = logging.getLogger("graph-canvas-ai.agent")
 
-_STEP_TO_RUN_OK = {RUN_SUCCEEDED}
 # ToolRun 的终态 → 计划步骤状态（字符串一致，显式映射防漂移）
 _RUN_TO_STEP = {
     RUN_SUCCEEDED: plan_mod.SUCCEEDED,
@@ -45,59 +57,97 @@ _RUN_TO_STEP = {
 }
 
 
-async def respond(
+async def draft(
     session: AsyncSession, *, user_id: uuid.UUID, session_id: uuid.UUID, instruction: str
 ) -> AgentRun:
-    """规划一轮指令并落库。多步计划先停住等确认，单步直接开跑。"""
-    edit_session = await sessions_get(session, user_id, session_id)
-    doc = history_service.LayerDocument.model_validate(edit_session.doc)
+    """预创建一轮「规划中」的占位，返回后立即由后台任务流式规划。
 
-    reply, steps, error = "", [], None
-    try:
-        calls = await llm_module.plan_tool_calls(
-            instruction, tool_exec.summarize_doc(doc), _function_schemas()
-        )
-        # planner 吐的是 {name, args}（function calling 惯例），归一成计划的 {tool, params}
-        steps = plan_mod.validate(
-            [{"tool": call.get("name"), "args": call.get("args") or {}} for call in calls]
-        )
-    except llm_module.PlannerError as exc:
-        error = str(exc)
-    except PlanError as exc:
-        error = str(exc)
-        steps = []
-    except Exception:  # noqa: BLE001 - 规划层的任何意外都转成人话，绝不 500
-        logger.exception("计划规划异常 session_id=%s", session_id)
-        error = "规划失败，请重试"
-        steps = []
-
-    if error:
-        run_status = "failed"
-    elif plan_mod.needs_confirm(steps):
-        run_status = AWAITING_CONFIRM
-        reply = reply or "将按以下步骤执行，确认后开始。"
-    elif steps:
-        run_status = RUNNING
-    else:
-        run_status = "succeeded"
-        reply = "这句话没有对应到可执行的操作，换一种说法试试。"
-
+    占位先行是 CoT 实时性的前提：前端拿到 run_id 就能订阅
+    /events/agent/{id}，模型边想边推，一个 token 都不用等规划结束。
+    """
+    await sessions_get(session, user_id, session_id)  # 归属校验
     turn = AgentRun(
         user_id=user_id,
         session_id=session_id,
         instruction=instruction,
-        plan=steps,
-        reply=reply,
-        status=run_status,
-        error=error,
+        plan=[],
+        status=PLANNING,
     )
     session.add(turn)
     await session.commit()
     await session.refresh(turn)
 
-    if turn.status == RUNNING:
-        await _advance(session, turn)
+    # API 进程内后台规划：请求立刻返回，token 走 Redis 推给订阅者。
+    # 规划只有几秒，不值得过 ARQ；但必须用独立会话，不能复用请求级 session
+    task = asyncio.create_task(_plan_and_fill(turn.id))
+    turn.__dict__["_plan_task"] = task  # 仅持引用防 GC，无业务含义
     return turn
+
+
+async def _plan_and_fill(run_id: uuid.UUID) -> None:
+    """后台流式规划：思考 token 经 cot 通道实时推送，结束后更新占位轮。"""
+    async with runs_service.session_scope() as session:
+        turn = await session.get(AgentRun, run_id)
+        if turn is None or turn.status != PLANNING:
+            return
+        emit = _emitter(turn.id)
+
+        reply, steps, error = "", [], None
+        try:
+            edit_session = await sessions_get(session, turn.user_id, turn.session_id)
+            doc = history_service.LayerDocument.model_validate(edit_session.doc)
+            calls = await llm_module.plan_tool_calls_stream(
+                turn.instruction,
+                tool_exec.summarize_doc(doc),
+                _function_schemas(),
+                emit,
+            )
+            # planner 吐的是 {name, args}（function calling 惯例），归一成计划的 {tool, params}
+            steps = plan_mod.validate(
+                [{"tool": call.get("name"), "args": call.get("args") or {}} for call in calls]
+            )
+        except llm_module.PlannerError as exc:
+            error = str(exc)
+            steps = []
+        except PlanError as exc:
+            error = str(exc)
+            steps = []
+        except Exception:  # noqa: BLE001 - 规划层的任何意外都转成人话，绝不 500
+            logger.exception("计划规划异常 run_id=%s", run_id)
+            error = "规划失败，请重试"
+            steps = []
+
+        if error:
+            turn.status = "failed"
+            await emit("reflection", error)
+        elif plan_mod.needs_confirm(steps):
+            turn.status = AWAITING_CONFIRM
+            reply = "将按以下步骤执行，确认后开始。"
+            await emit("observation", "计划已就绪，等待确认")
+        elif steps:
+            turn.status = RUNNING
+            await emit("observation", "单步计划，直接执行")
+        else:
+            turn.status = "succeeded"
+            reply = "这句话没有对应到可执行的操作，换一种说法试试。"
+            await emit("observation", reply)
+
+        turn.plan = steps
+        turn.reply = reply
+        turn.error = error
+        await session.commit()
+        await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
+
+        if turn.status == RUNNING:
+            turn = await _advance(session, turn)
+            await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
+
+
+def _emitter(run_id: uuid.UUID):
+    async def emit(kind: str, delta: str) -> None:
+        await cot_service.emit(run_id, kind, delta)
+
+    return emit
 
 
 async def confirm(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
@@ -178,11 +228,13 @@ async def continue_after_tool_run(
 
 async def _advance(session: AsyncSession, turn: AgentRun) -> AgentRun:
     """把当前所有 ready 的步骤跑掉；排队步投出去就停，等回调再推进。"""
+    emit = _emitter(turn.id)
     steps = [dict(step) for step in turn.plan]
     progressed = True
     while progressed:
         progressed = False
         for step in plan_mod.ready(steps):
+            await emit("observation", f"开始执行第 {step['id']} 步：{step['tool']}")
             updated, results = await history_service.apply_tool_calls(
                 session,
                 user_id=turn.user_id,
@@ -193,19 +245,23 @@ async def _advance(session: AsyncSession, turn: AgentRun) -> AgentRun:
             if result is None:
                 step["status"] = plan_mod.FAILED
                 step["message"] = "步骤执行失败"
+                await emit("observation", "失败：步骤执行失败")
                 progressed = True
             elif result.run_id:
                 # 排队步：run 已由 apply_tool_calls 投递，等 ToolRun 终态回调
                 step["run_id"] = str(result.run_id)
                 step["status"] = plan_mod.QUEUED
                 step["message"] = result.message
+                await emit("observation", f"已提交后台任务：{result.message}")
             elif result.ok:
                 step["status"] = plan_mod.SUCCEEDED
                 step["message"] = result.message
+                await emit("observation", f"完成：{result.message}")
                 progressed = True
             else:
                 step["status"] = plan_mod.FAILED
                 step["message"] = result.message
+                await emit("observation", f"失败：{result.message}")
                 progressed = True
             # 步骤级变更立即落库（apply_tool_calls 已提交文档/历史，这里补计划本身）
             turn.plan = [dict(item) for item in steps]

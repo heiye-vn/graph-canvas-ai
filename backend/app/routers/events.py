@@ -19,7 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.deps import user_from_token
 from app.models import User
-from app.schemas.events import DoneEvent, frame, ping_frame
+from app.schemas.events import (
+    CotEvent,
+    DoneEvent,
+    SnapshotEvent,
+    frame,
+    ping_frame,
+)
+from app.services import cot as cot_service
 from app.services import events
 from app.services import runs as runs_service
 
@@ -27,6 +34,73 @@ router = APIRouter(tags=["events"])
 
 HEARTBEAT_SECONDS = 15
 MAX_STREAM_SECONDS = 600  # 主动断开让客户端重连，避免连接无限期挂着
+
+
+@router.get("/events/agent/{run_id}")
+async def stream_agent_run(
+    run_id: uuid.UUID,
+    token: str | None = Query(default=None),
+    cot_after: int = Query(default=0, description="重连恢复：只回放 seq 大于该值的 CoT 增量"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent 对话轮的 CoT 流（M9.1）：回放缓冲 → 实时订阅 → done 收束。
+
+    与 /events/runs 的差异：载体是 agent_runs（规划期没有 ToolRun），
+    建流时先按 cot_after 回放 Redis 缓冲 —— 断线重连不丢 token，
+    前端再按 seq 去重，双保险（DoD ③）。
+    """
+    from app.services import agent_runs as agent_runs_service
+
+    user: User = await user_from_token(token, session)
+    turn = await agent_runs_service.get(session, user_id=user.id, run_id=run_id)
+    status_at_open = turn.status
+    terminal_at_open = turn.is_terminal
+
+    from fastapi.responses import StreamingResponse
+
+    return StreamingResponse(
+        _agent_event_stream(run_id, status_at_open, terminal_at_open, cot_after),
+        media_type="text/event-stream",
+        status_code=status.HTTP_200_OK,
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+async def _agent_event_stream(
+    run_id: uuid.UUID, status_at_open: str, terminal_at_open: bool, cot_after: int
+):
+    started = time.monotonic()
+
+    async with events.subscription(run_id) as stream:
+        yield frame(SnapshotEvent(run_id=run_id, status=status_at_open))
+
+        # 回放断线期间错过的 CoT（前端按 seq 去重，与实时帧重叠也幂等）
+        for item in await cot_service.replay(run_id, after_seq=cot_after):
+            yield frame(CotEvent.model_validate(item))
+
+        if terminal_at_open:
+            yield frame(DoneEvent(run_id=run_id, status=status_at_open))
+            return
+
+        iterator = stream.__aiter__()
+        while True:
+            if time.monotonic() - started > MAX_STREAM_SECONDS:
+                return
+            try:
+                event = await asyncio.wait_for(iterator.__anext__(), timeout=HEARTBEAT_SECONDS)
+            except TimeoutError:
+                yield ping_frame(run_id)
+                continue
+            except StopAsyncIteration:
+                return
+
+            yield frame(event)
+            if event.type in {"done", "error"}:
+                return
 
 
 @router.get("/events/runs/{run_id}")

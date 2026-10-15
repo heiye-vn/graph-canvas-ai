@@ -27,6 +27,8 @@ import {
 } from '@/api/agent'
 import type { AgentRun, PlanStep } from '@/api/agent'
 import { useRunStream } from '@/hooks/useRunStream'
+import { useCotStream } from '@/hooks/useCotStream'
+import CoTStream from '@/components/agent/CoTStream'
 
 interface ChatMessage {
   role: 'user' | 'agent'
@@ -184,6 +186,9 @@ function PlanCard({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const reportedRef = useRef<string | null>(null)
+  // 每次行动（确认/重试/继续）后重开 CoT 流：执行期的 observation 也在同一条通道
+  const [cotEpoch, setCotEpoch] = useState(0)
+  const cot = useCotStream(runId, true, cotEpoch)
 
   const load = useCallback(async () => {
     try {
@@ -196,6 +201,16 @@ function PlanCard({
   useEffect(() => {
     void load()
   }, [load])
+
+  // CoT 流收束 = 规划/推进到了终态（或断线）—— 拉一次最新现场
+  const refreshOnClose = useRef(false)
+  useEffect(() => {
+    if (cot.closed && !refreshOnClose.current) {
+      refreshOnClose.current = true
+      void load()
+    }
+    if (!cot.closed) refreshOnClose.current = false
+  }, [cot.closed, load])
 
   // 恢复现场后计划若停在 awaiting_confirm / failed，卡片直接可交互；
   // 执行中的排队步 → 订阅它的进度流
@@ -221,6 +236,7 @@ function PlanCard({
       .then((next) => {
         setRun(next)
         onChanged?.()
+        setCotEpoch((prev) => prev + 1) // 重开 CoT 流收执行期的观察
       })
       .catch((err) => setError((err as Error).message))
       .finally(() => setBusy(false))
@@ -241,6 +257,7 @@ function PlanCard({
       const next = await action()
       setRun(next)
       onChanged?.()
+      setCotEpoch((prev) => prev + 1) // 重开 CoT 流，收执行期的观察
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -257,7 +274,13 @@ function PlanCard({
         {run.error && <span className="text-danger">{run.error}</span>}
       </div>
 
-      {run.reply && <p className="text-muted mt-1 mb-1.5">{run.reply}</p>}
+      <CoTStream
+        items={cot.items}
+        closed={cot.closed}
+        defaultOpen={run.status === 'planning'}
+      />
+
+      {run.reply && <p className="text-muted mt-1.5 mb-1.5">{run.reply}</p>}
 
       {run.plan.length > 0 && (
         <ol className="m-0 list-none space-y-1 p-0">
@@ -339,6 +362,7 @@ function StepDot({ status }: { status: PlanStep['status'] }) {
 
 function StatusTag({ status }: { status: AgentRun['status'] }) {
   const label: Record<AgentRun['status'], string> = {
+    planning: '规划中',
     awaiting_confirm: '待确认',
     running: '执行中',
     succeeded: '已完成',
@@ -346,6 +370,7 @@ function StatusTag({ status }: { status: AgentRun['status'] }) {
     cancelled: '已取消',
   }
   const color: Record<AgentRun['status'], string> = {
+    planning: 'processing',
     awaiting_confirm: 'gold',
     running: 'processing',
     succeeded: 'success',

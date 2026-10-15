@@ -27,6 +27,7 @@ export interface PlanStep {
 }
 
 export type AgentRunStatus =
+  | 'planning'
   | 'awaiting_confirm'
   | 'running'
   | 'succeeded'

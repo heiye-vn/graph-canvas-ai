@@ -1,12 +1,15 @@
-"""M8 多步计划 API 集成测试（规划模型打桩）。
+"""M8/M9.1 多步计划 API 集成测试（规划模型打桩）。
 
-桩固定在 `app.agent.llm.plan_tool_calls` —— 「计划校验 → 确认 → 执行 →
-推进 → 级联取消」全链路都是真代码。
+桩固定在 `app.agent.llm.plan_tool_calls_stream` —— 「占位 → 流式规划 →
+校验 → 确认 → 执行 → 推进 → 级联取消」全链路都是真代码。
+规划在 API 进程内后台跑，测试里用轮询等它收敛。
 """
 
 from __future__ import annotations
 
 import io
+import json
+import time
 import uuid
 
 import pytest
@@ -35,7 +38,7 @@ def auth(client: TestClient):
     )
     assert r.status_code == 201
     token = r.json()["token"]["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return {"Authorization": f"Bearer {token}", "_token": token}
 
 
 def make_session(client: TestClient, headers: dict) -> dict:
@@ -63,10 +66,26 @@ def make_session(client: TestClient, headers: dict) -> dict:
 
 
 def stub_planner(monkeypatch, calls):
-    async def fake(instruction, summary, functions):
+    async def fake(instruction, summary, functions, emit=None):
+        if emit is not None:
+            await emit("thought", "桩：想好了")
+            for call in calls:
+                await emit("tool_call", f"调用 {call['name']}")
         return calls
 
-    monkeypatch.setattr(llm_module, "plan_tool_calls", fake)
+    monkeypatch.setattr(llm_module, "plan_tool_calls_stream", fake)
+
+
+def wait_plan(client: TestClient, headers: dict, run_id: str, timeout: float = 5.0) -> dict:
+    """规划在后台跑：轮询到收敛（终态，或停在等确认）为止。"""
+    terminal = {"succeeded", "failed", "cancelled", "awaiting_confirm"}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = client.get(f"/api/agent/runs/{run_id}", headers=headers).json()
+        if run["status"] in terminal:
+            return run
+        time.sleep(0.05)
+    raise AssertionError("规划超时仍未收敛")
 
 
 def test_multi_step_plan_requires_confirm_then_executes(client, auth, monkeypatch):
@@ -86,7 +105,9 @@ def test_multi_step_plan_requires_confirm_then_executes(client, auth, monkeypatc
         headers=auth,
     )
     assert r.status_code == 200, r.text
-    run = r.json()
+    run_id = r.json()["id"]
+
+    run = wait_plan(client, auth, run_id)
     assert run["status"] == "awaiting_confirm"
     assert len(run["plan"]) == 2
     assert run["plan"][0]["status"] == "pending"
@@ -95,7 +116,7 @@ def test_multi_step_plan_requires_confirm_then_executes(client, auth, monkeypatc
     before = client.get(f"/api/edit-sessions/{session['id']}", headers=auth).json()
     assert before["revision"] == session["revision"]
 
-    r = client.post(f"/api/agent/runs/{run['id']}/confirm", headers=auth)
+    r = client.post(f"/api/agent/runs/{run_id}/confirm", headers=auth)
     assert r.status_code == 200, r.text
     done = r.json()
     assert done["status"] == "succeeded"
@@ -110,7 +131,7 @@ def test_multi_step_plan_requires_confirm_then_executes(client, auth, monkeypatc
     assert "adjust_color" in labels and "flip_layer" in labels
 
     # 幂等：结束态再 confirm 是 409，不是 500
-    r = client.post(f"/api/agent/runs/{run['id']}/confirm", headers=auth)
+    r = client.post(f"/api/agent/runs/{run_id}/confirm", headers=auth)
     assert r.status_code == 409
 
 
@@ -125,7 +146,7 @@ def test_single_step_plan_runs_directly(client, auth, monkeypatch):
         headers=auth,
     )
     assert r.status_code == 200
-    run = r.json()
+    run = wait_plan(client, auth, r.json()["id"])
     assert run["status"] == "succeeded"
     assert run["plan"][0]["status"] == "succeeded"
 
@@ -141,17 +162,17 @@ def test_hallucinated_tool_rejected_with_plain_words(client, auth, monkeypatch):
         headers=auth,
     )
     assert r.status_code == 200
-    run = r.json()
+    run = wait_plan(client, auth, r.json()["id"])
     assert run["status"] == "failed"
     assert run["plan"] == []
     assert "不存在的工具" in run["error"]
 
 
 def test_planner_error_becomes_plain_words(client, auth, monkeypatch):
-    async def boom(instruction, summary, functions):
+    async def boom(instruction, summary, functions, emit=None):
         raise llm_module.PlannerError("规划模型 404：端点填错了")
 
-    monkeypatch.setattr(llm_module, "plan_tool_calls", boom)
+    monkeypatch.setattr(llm_module, "plan_tool_calls_stream", boom)
     session = make_session(client, auth)
     r = client.post(
         "/api/agent/plan",
@@ -159,7 +180,7 @@ def test_planner_error_becomes_plain_words(client, auth, monkeypatch):
         headers=auth,
     )
     assert r.status_code == 200
-    run = r.json()
+    run = wait_plan(client, auth, r.json()["id"])
     assert run["status"] == "failed"
     assert "404" in run["error"]
 
@@ -167,7 +188,6 @@ def test_planner_error_becomes_plain_words(client, auth, monkeypatch):
 def test_cancel_cascades_queued_runs(client, auth, monkeypatch):
     """DoD ③：取消后续时，已投递的排队任务级联取消。"""
     session = make_session(client, auth)
-    # 先造一个选区，erase_region 提交时才走得通
     sel = client.post(
         f"/api/edit-sessions/{session['id']}/selection",
         json={
@@ -190,31 +210,28 @@ def test_cancel_cascades_queued_runs(client, auth, monkeypatch):
         json={"session_id": session["id"], "instruction": "消除再翻转"},
         headers=auth,
     )
-    run = r.json()
-    assert run["status"] == "awaiting_confirm"
+    run_id = r.json()["id"]
+    wait_plan(client, auth, run_id)
 
-    r = client.post(f"/api/agent/runs/{run['id']}/confirm", headers=auth)
+    r = client.post(f"/api/agent/runs/{run_id}/confirm", headers=auth)
     confirmed = r.json()
     assert confirmed["status"] == "running"
     queued_step = next(step for step in confirmed["plan"] if step["tool"] == "erase_region")
     assert queued_step["status"] == "queued"
     assert queued_step["run_id"]
 
-    # 取消后续：排队中的 ToolRun 一并取消
-    r = client.post(f"/api/agent/runs/{run['id']}/cancel", headers=auth)
+    r = client.post(f"/api/agent/runs/{run_id}/cancel", headers=auth)
     assert r.status_code == 200
     cancelled = r.json()
     assert cancelled["status"] == "cancelled"
     by_id = {step["id"]: step for step in cancelled["plan"]}
     assert by_id[queued_step["id"]]["status"] == "canceled"
 
-    # 级联：对应的 ToolRun 也是 canceled
     tool_run = client.get(f"/api/runs/{queued_step['run_id']}", headers=auth).json()
     assert tool_run["status"] == "cancelled"
 
-    # continue 一个已取消的任务：状态如实写回，不崩
     r = client.post(
-        f"/api/agent/runs/{run['id']}/continue",
+        f"/api/agent/runs/{run_id}/continue",
         json={"run_id": queued_step["run_id"]},
         headers=auth,
     )
@@ -237,13 +254,41 @@ def test_plan_survives_refresh(client, auth, monkeypatch):
         json={"session_id": session["id"], "instruction": "两步"},
         headers=auth,
     ).json()
+    wait_plan(client, auth, created["id"])
 
     fetched = client.get(f"/api/agent/runs/{created['id']}", headers=auth).json()
     assert fetched["id"] == created["id"]
     assert len(fetched["plan"]) == 2
-    assert fetched["status"] == "awaiting_confirm"
 
-    listed = client.get(
-        f"/api/agent/sessions/{session['id']}/runs", headers=auth
-    ).json()
+    listed = client.get(f"/api/agent/sessions/{session['id']}/runs", headers=auth).json()
     assert [item["id"] for item in listed][-1] == created["id"]
+
+
+def test_cot_stream_replays_buffer(client, auth, monkeypatch):
+    """DoD ③ 服务端半边：SSE 建流即回放缓冲的 CoT，done 收束。"""
+    session = make_session(client, auth)
+    stub_planner(monkeypatch, [{"name": "flip_layer", "args": {"direction": "vertical"}}])
+    created = client.post(
+        "/api/agent/plan",
+        json={"session_id": session["id"], "instruction": "翻转"},
+        headers=auth,
+    ).json()
+    run_id = created["id"]
+    wait_plan(client, auth, run_id)  # 等规划收束（缓冲里已有完整 CoT）
+
+    token = auth["_token"]
+    resp = client.get(f"/events/agent/{run_id}?token={token}&cot_after=0")
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    kinds, saw_done = [], False
+    for line in resp.text.splitlines():
+        if not line.startswith("data:"):
+            continue
+        event = json.loads(line[5:])
+        if event["type"] == "cot":
+            kinds.append(event["kind"])
+        if event["type"] == "done":
+            saw_done = True
+    assert "thought" in kinds and "tool_call" in kinds
+    assert saw_done

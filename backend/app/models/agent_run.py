@@ -19,6 +19,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 
 # 整轮状态（与 tool_runs 的 queued/running 同名不同义 —— 这是「一轮对话」的生命周期）
+PLANNING = "planning"
 AWAITING_CONFIRM = "awaiting_confirm"
 RUNNING = "running"
 SUCCEEDED = "succeeded"

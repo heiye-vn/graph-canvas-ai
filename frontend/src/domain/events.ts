@@ -124,6 +124,27 @@ export interface SubscribeOptions {
 export function subscribeRun(runId: string, options: SubscribeOptions): () => void {
   const token = tokenStore.get() ?? ''
   const url = `/events/runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`
+  return subscribeUrl(url, options)
+}
+
+/**
+ * 订阅一轮对话的 CoT 流（M9.1）。
+ *
+ * `cotAfter`：重连恢复参数，只回放 seq 更大的增量。EventSource 自动重连
+ * 时 URL 不会变（永远带着打开时的 cotAfter），重叠部分由前端按 seq 去重
+ * —— 后端回放 + 前端过滤，双保险。
+ */
+export function subscribeAgent(
+  runId: string,
+  cotAfter: number,
+  options: SubscribeOptions,
+): () => void {
+  const token = tokenStore.get() ?? ''
+  const url = `/events/agent/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}&cot_after=${cotAfter}`
+  return subscribeUrl(url, options)
+}
+
+function subscribeUrl(url: string, options: SubscribeOptions): () => void {
   const source = new EventSource(url)
 
   source.onmessage = (message) => {

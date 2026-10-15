@@ -51,8 +51,12 @@ async def create_plan(
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> AgentRunOut:
-    """一句指令 → 一轮计划。>1 步停在 awaiting_confirm 等人点头。"""
-    return await agent_runs_service.respond(
+    """一句指令 → planning 占位（毫秒级返回）。
+
+    规划在后台流式执行：前端拿 run_id 订阅 /events/agent/{id} 收 CoT，
+    收到 done 帧后 GET 本轮拿最终计划（M9.1）。
+    """
+    return await agent_runs_service.draft(
         session,
         user_id=user.id,
         session_id=payload.session_id,

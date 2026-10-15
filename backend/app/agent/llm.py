@@ -82,6 +82,29 @@ async def plan_tool_calls(
     返回 `[{name, args}]`。模型没调用任何工具时返回空列表 ——
     这是正常情况（比如用户说的是一句闲聊），由上层决定怎么回应用户。
     """
+    calls = await _plan_stream(instruction, doc_summary, functions, emit=None)
+    return calls
+
+
+async def plan_tool_calls_stream(
+    instruction: str,
+    doc_summary: str,
+    functions: list[dict[str, Any]],
+    emit,
+) -> list[dict[str, Any]]:
+    """流式版规划：思考 token 经 `emit(kind, delta)` 实时推出去（M9.1）。
+
+    emit 是 `async (kind: str, delta: str) -> None`，由上层绑定 run 通道。
+    """
+    return await _plan_stream(instruction, doc_summary, functions, emit=emit)
+
+
+async def _plan_stream(
+    instruction: str,
+    doc_summary: str,
+    functions: list[dict[str, Any]],
+    emit,
+) -> list[dict[str, Any]]:
     try:
         base_url, _api_key, model = get_settings().require_llm_config()
     except RuntimeError as exc:
@@ -89,21 +112,39 @@ async def plan_tool_calls(
         raise PlannerError(str(exc)) from exc
 
     llm = get_chat_model().bind_tools(functions)
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(content=f"{doc_summary}\n\n用户要求：{instruction}"),
+    ]
+
+    async def _push(kind: str, delta: str) -> None:
+        if emit is not None and delta:
+            await emit(kind, delta)
+
+    # 两条硬规矩（施工图钉死的坑）：
+    #   1. 推理模型的 reasoning_content 与 content 是两个字段，都要透传
+    #   2. chunk 是增量（delta），只追加、绝不整段覆盖
+    merged = None
     try:
-        message = await llm.ainvoke(
-            [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=f"{doc_summary}\n\n用户要求：{instruction}"),
-            ]
-        )
+        async for chunk in llm.astream(messages):
+            reasoning = (chunk.additional_kwargs or {}).get("reasoning_content")
+            if reasoning:
+                await _push("thought", reasoning)
+            content = chunk.content if isinstance(chunk.content, str) else ""
+            if content:
+                await _push("thought", content)
+            merged = chunk if merged is None else merged + chunk
     except Exception as exc:
         raise PlannerError(_describe_llm_error(exc, model=model, base_url=base_url)) from exc
 
     calls = []
-    for call in getattr(message, "tool_calls", []) or []:
+    for call in getattr(merged, "tool_calls", []) or []:
         name = call.get("name")
         if not name:
             continue
         args = call.get("args") or {}
         calls.append({"name": name, "args": dict(args)})
+
+    for call in calls:
+        await _push("tool_call", f"调用 {call['name']}")
     return calls
