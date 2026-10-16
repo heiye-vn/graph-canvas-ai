@@ -13,6 +13,9 @@
 # 用户评测素材
 evals/
 
+# 评测本地产物（baseline.json 入库，report.json 不入库）
+backend/app/eval/report.json
+
 # Python
 __pycache__/
 *.py[cod]

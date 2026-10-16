@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "note": "Agent 规划评测集：{指令 → 期望工具序列}。slots 是参数槽位提示（宽松匹配：只查键命中与类型兼容，不查具体数值——模型的创作自由不在考核范围）。工具名必须与 tools/registry.py 一致。",
+  "cases": [
+    {
+      "id": "c001",
+      "instruction": "把图调亮一点",
+      "expected": [{"tool": "adjust_color", "slots": {"brightness": "number"}}],
+      "note": "单步调色"
+    },
+    {
+      "id": "c002",
+      "instruction": "调暗一些",
+      "expected": [{"tool": "adjust_color", "slots": {"brightness": "number"}}],
+      "note": "负值亮度"
+    },
+    {
+      "id": "c003",
+      "instruction": "饱和度拉高一点",
+      "expected": [{"tool": "adjust_color", "slots": {"saturation": "number"}}],
+      "note": "饱和度槽位"
+    },
+    {
+      "id": "c004",
+      "instruction": "色调偏暖一点",
+      "expected": [{"tool": "adjust_color", "slots": {"temperature": "number"}}],
+      "note": "色温槽位"
+    },
+    {
+      "id": "c005",
+      "instruction": "左右翻转一下",
+      "expected": [{"tool": "flip_layer", "slots": {"direction": ["horizontal"]}}],
+      "note": "literal 槽位"
+    },
+    {
+      "id": "c006",
+      "instruction": "上下翻转",
+      "expected": [{"tool": "flip_layer", "slots": {"direction": ["vertical"]}}],
+      "note": "literal 槽位"
+    },
+    {
+      "id": "c007",
+      "instruction": "整层调成半透明",
+      "expected": [{"tool": "set_opacity", "slots": {"opacity": "number"}}],
+      "note": "透明度"
+    },
+    {
+      "id": "c008",
+      "instruction": "把最上面那层隐藏掉",
+      "expected": [{"tool": "set_layer_visible", "slots": {"visible": [false]}}],
+      "note": "布尔 literal"
+    },
+    {
+      "id": "c009",
+      "instruction": "这个图层改名叫「主图」",
+      "expected": [{"tool": "rename_layer", "slots": {"name": "string"}}],
+      "note": "改名"
+    },
+    {
+      "id": "c010",
+      "instruction": "把图层移到左边一点、上面一点",
+      "expected": [{"tool": "move_layer", "slots": {"x": "number", "y": "number"}}],
+      "note": "双槽位"
+    },
+    {
+      "id": "c011",
+      "instruction": "缩小到一半大小",
+      "expected": [{"tool": "resize_layer", "slots": {"width": "number", "height": "number"}}],
+      "note": "尺寸"
+    },
+    {
+      "id": "c012",
+      "instruction": "顺时针旋转 45 度",
+      "expected": [{"tool": "rotate_layer", "slots": {"degrees": "number"}}],
+      "note": "旋转"
+    },
+    {
+      "id": "c013",
+      "instruction": "加一行白色的大标题「夏日促销」",
+      "expected": [{"tool": "add_text_layer", "slots": {"text": "string"}}],
+      "note": "文字内容任意，fill 不考核"
+    },
+    {
+      "id": "c014",
+      "instruction": "画布背景改成深蓝色",
+      "expected": [{"tool": "set_canvas_background", "slots": {"color": "string"}}],
+      "note": "背景色值任意表示法"
+    },
+    {
+      "id": "c015",
+      "instruction": "删掉「图层 2」",
+      "expected": [{"tool": "remove_layer", "slots": {"layer": "string"}}],
+      "note": "图层名指代"
+    },
+    {
+      "id": "c016",
+      "instruction": "切换到候选图 1",
+      "expected": [{"tool": "switch_current_image", "slots": {"layer": "string"}}],
+      "note": "多候选切换"
+    },
+    {
+      "id": "c017",
+      "instruction": "调亮一点然后水平翻转",
+      "expected": [
+        {"tool": "adjust_color", "slots": {"brightness": "number"}},
+        {"tool": "flip_layer", "slots": {"direction": ["horizontal"]}}
+      ],
+      "note": "两步：调色+翻转"
+    },
+    {
+      "id": "c018",
+      "instruction": "先上下翻转再调暗",
+      "expected": [
+        {"tool": "flip_layer", "slots": {"direction": ["vertical"]}},
+        {"tool": "adjust_color", "slots": {"brightness": "number"}}
+      ],
+      "note": "顺序敏感"
+    },
+    {
+      "id": "c019",
+      "instruction": "加一个红色标题然后移到画面顶部",
+      "expected": [
+        {"tool": "add_text_layer", "slots": {"text": "string"}},
+        {"tool": "move_layer", "slots": {"x": "number", "y": "number"}}
+      ],
+      "note": "加字+移动"
+    },
+    {
+      "id": "c020",
+      "instruction": "改名叫「头图」然后隐藏",
+      "expected": [
+        {"tool": "rename_layer", "slots": {"name": "string"}},
+        {"tool": "set_layer_visible", "slots": {"visible": [false]}}
+      ],
+      "note": "改名+隐藏"
+    },
+    {
+      "id": "c021",
+      "instruction": "裁掉四边留中间方形区域，然后调亮",
+      "expected": [
+        {"tool": "crop_layer", "slots": {"width": "integer", "height": "integer"}},
+        {"tool": "adjust_color", "slots": {"brightness": "number"}}
+      ],
+      "note": "裁剪+调色"
+    },
+    {
+      "id": "c022",
+      "instruction": "半透明处理然后顺时针转 90 度",
+      "expected": [
+        {"tool": "set_opacity", "slots": {"opacity": "number"}},
+        {"tool": "rotate_layer", "slots": {"degrees": "number"}}
+      ],
+      "note": "透明+旋转"
+    },
+    {
+      "id": "c023",
+      "instruction": "放大到宽 200 然后右移 100",
+      "expected": [
+        {"tool": "resize_layer", "slots": {"width": "number", "height": "number"}},
+        {"tool": "move_layer", "slots": {"x": "number"}}
+      ],
+      "note": "尺寸+位移，move 只查 x 槽位"
+    },
+    {
+      "id": "c024",
+      "instruction": "画布背景换白色然后左右翻转",
+      "expected": [
+        {"tool": "set_canvas_background", "slots": {"color": "string"}},
+        {"tool": "flip_layer", "slots": {"direction": ["horizontal"]}}
+      ],
+      "note": "背景+翻转"
+    },
+    {
+      "id": "c025",
+      "instruction": "还原裁剪然后重新调一下颜色",
+      "expected": [
+        {"tool": "reset_crop", "slots": {}},
+        {"tool": "adjust_color", "slots": {}}
+      ],
+      "note": "无槽位步骤"
+    },
+    {
+      "id": "c026",
+      "instruction": "拆成背景和主体两层，然后把整体调亮",
+      "expected": [
+        {"tool": "split_layers", "slots": {}},
+        {"tool": "adjust_color", "slots": {"brightness": "number"}}
+      ],
+      "note": "排队型工具参与规划序列"
+    },
+    {
+      "id": "c027",
+      "instruction": "调亮、水平翻转，再加一行说明文字",
+      "expected": [
+        {"tool": "adjust_color", "slots": {"brightness": "number"}},
+        {"tool": "flip_layer", "slots": {"direction": ["horizontal"]}},
+        {"tool": "add_text_layer", "slots": {"text": "string"}}
+      ],
+      "note": "三步链"
+    },
+    {
+      "id": "c028",
+      "instruction": "隐藏最上层，背景改黑色，然后加白色文字",
+      "expected": [
+        {"tool": "set_layer_visible", "slots": {"visible": [false]}},
+        {"tool": "set_canvas_background", "slots": {"color": "string"}},
+        {"tool": "add_text_layer", "slots": {"text": "string"}}
+      ],
+      "note": "三步链含布尔槽位"
+    },
+    {
+      "id": "c029",
+      "instruction": "裁剪中间区域，调亮，然后改名成「成品」",
+      "expected": [
+        {"tool": "crop_layer", "slots": {"width": "integer", "height": "integer"}},
+        {"tool": "adjust_color", "slots": {"brightness": "number"}},
+        {"tool": "rename_layer", "slots": {"name": "string"}}
+      ],
+      "note": "三步链"
+    },
+    {
+      "id": "c030",
+      "instruction": "左右翻转、旋转 45 度、再调成半透明",
+      "expected": [
+        {"tool": "flip_layer", "slots": {"direction": ["horizontal"]}},
+        {"tool": "rotate_layer", "slots": {"degrees": "number"}},
+        {"tool": "set_opacity", "slots": {"opacity": "number"}}
+      ],
+      "note": "三步链"
+    },
+    {
+      "id": "c031",
+      "instruction": "你好呀",
+      "expected": [],
+      "note": "闲聊 → 空计划"
+    },
+    {
+      "id": "c032",
+      "instruction": "帮我看看这张图怎么样",
+      "expected": [],
+      "note": "无明确操作 → 空计划"
+    }
+  ]
+}
