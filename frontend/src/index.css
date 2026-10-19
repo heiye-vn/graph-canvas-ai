@@ -1,41 +1,39 @@
 @import "tailwindcss";
 
 @theme {
-  /*
-   * 中文字体栈的顺序是排版质量的根：system-ui 在 Windows 上对中文的回退
-   * 不可控（会落到浏览器默认 serif 的渲染路径），必须把 CJK 字体显式列出来。
-   * Latin 先行（Segoe UI / SF），中文紧随其后，sans-serif 兜底。
-   */
-  /* --font-sans:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC",
-    sans-serif; */
 
-  --color-ink: #171917;
-  --color-muted: #6f746f;
-  --color-faint: #9aa09a;
-  --color-line: #e5e8e4;
-  --color-line-strong: #d7dbd6;
+  --color-ink: #0f1419;
+  --color-muted: #536471;
+  --color-faint: #8b98a5;
+  --color-line: #e2e8f0;
+  --color-line-strong: #cbd5e1;
   --color-paper: #ffffff;
-  --color-canvas: #eff1ee;
-  --color-soft: #f6f7f5;
-  --color-dark: #1e211e;
+  --color-canvas: #f8fafc;
+  --color-soft: #f1f5f9;
+  --color-dark: #0f172a;
 
-  --color-brand: #5f98ad;
-  --color-brand-strong: #427f95;
-  --color-brand-soft: #e8f2f5;
-  --color-accent: #d9ff6e;
+  /* 画布深色沉浸式工作台 */
+  --color-stage: #131417;
+  --color-stage-card: #1c1d22;
+  --color-stage-border: #282a30;
 
-  --color-danger: #d95656;
-  --color-success: #3b8a61;
+  --color-brand: #2563eb;
+  --color-brand-strong: #1d4ed8;
+  --color-brand-soft: #eff6ff;
+  --color-accent: #ec4899;
 
-  --radius-card: 18px;
-  --radius-control: 12px;
-  --radius-panel: 26px;
+  --color-danger: #ef4444;
+  --color-success: #10b981;
 
-  --shadow-card: 0 16px 42px rgb(25 31 26 / 0.09);
-  --shadow-control: 0 8px 22px rgb(27 31 27 / 0.08);
-  --shadow-lift: 0 20px 46px -18px rgb(20 26 20 / 0.18);
+  /* 专业生产力工具级微圆角 */
+  --radius-card: 8px;
+  --radius-control: 6px;
+  --radius-panel: 10px;
+
+  --shadow-card: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+  --shadow-control: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-lift: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-stage: 0 20px 40px -10px rgba(0, 0, 0, 0.45);
 }
 
 @layer base {
@@ -52,8 +50,8 @@
   body {
     @apply bg-canvas text-ink antialiased;
     font-family:
-      -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC",
-      "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+      'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "PingFang SC",
+      "HarmonyOS Sans SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -63,22 +61,20 @@
     @apply outline-brand outline-2 outline-offset-2;
   }
 
-  /*
-   * 细滚动条：工具型 UI 的面板滚动条用系统默认的又宽又灰，
-   * 是「界面显得糙」的第二大来源（第一是字体）。
-   */
+  /* 细致专业级滚动条 */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
     background: var(--color-line-strong);
-    border-radius: 8px;
+    border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #c3c8c2;
+    background: #94a3b8;
   }
 }
+
