@@ -1,16 +1,12 @@
 /**
- * 图层面板 —— 紧凑单行行（M5.6 重写）。
+ * 图层面板 —— 专业级卡片式图层堆栈（对齐参考图1标准）。
  *
- * 顺序注意：`topDown()` —— 面板从上到下是「视觉上的从上到下」，
- * 文档数组是反的（从下到上）。这条转换只允许在这一处发生。
- *
- * 为什么不用 antd 的 List：List.Item 的 actions 布局为「内容 + 右侧操作区」设计，
- * 在 288px 的侧栏里 actions 会把内容挤到逐字换行，行高塌陷 ——
- * 那正是上一版截图里最刺眼的问题。密集面板要**自己控制行盒模型**：
- * 一行 = 图标 + 弹性名字 + 辅助信息 + 固定图标按钮，任何一段都不换行。
+ * 1. 顶部提供拆层/成层与文字关联快捷开关
+ * 2. 图层卡片化：包含类型预览、名称、锁定/激活徽章、不透明度、眼睛开关
  */
 
-import { Button, Tooltip } from 'antd'
+import { useState } from 'react'
+import { Button, Checkbox, Tooltip } from 'antd'
 import {
   BorderOutlined,
   EditOutlined,
@@ -40,115 +36,161 @@ export default function LayerPanel({
   busy = false,
 }: {
   doc: LayerDocument
-  /** 变换面板作用对象的 id；null 表示跟随「当前图」 */
   selectedId?: string | null
   onSelect?: (layerId: string) => void
   onToggleVisible: (layerId: string, visible: boolean) => void
   onSwitchCurrent: (layerId: string) => void
-  /** 文字层的「改文案」入口：切到 set_layer_text 工具（M7） */
   onEditText?: (layerId: string) => void
-  /** 有请求在飞：禁用按钮，避免同一步连点两次而多出一条历史 */
   busy?: boolean
 }) {
+  const [splitMode, setSplitMode] = useState<string>('split')
+  const [extractText, setExtractText] = useState(false)
   const layers = topDown(doc)
 
-  if (layers.length === 0) {
-    return <p className="text-faint m-0 text-xs">这个会话还没有图层</p>
-  }
-
   return (
-    <div className="space-y-0.5">
-      {layers.map((layer) => {
-        const active = layer.id === doc.active_layer_id
-        const selected = layer.id === selectedId
-        return (
-          <div
-            key={layer.id}
-            role="button"
-            tabIndex={0}
-            onClick={() => onSelect?.(layer.id)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                onSelect?.(layer.id)
-              }
-            }}
-            aria-pressed={selected}
-            className={`flex h-9 cursor-pointer items-center gap-2 rounded-control border px-2 transition-colors duration-150 ${
-              selected
-                ? 'border-brand bg-brand-soft'
-                : active
-                  ? 'border-transparent bg-brand-soft/70'
-                  : 'border-transparent hover:bg-soft'
+    <div className="space-y-2.5 select-none">
+      {/* 顶部操作区（对齐参考图1） */}
+      <div className="space-y-1.5 pb-1 border-b border-slate-100">
+        <div className="flex items-center justify-between text-xs text-slate-500">
+          <Checkbox
+            checked={extractText}
+            onChange={(e) => setExtractText(e.target.checked)}
+            className="text-[11px] text-slate-600"
+          >
+            同时拆出文字
+          </Checkbox>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1 bg-slate-100 p-0.5 rounded-md">
+          <button
+            type="button"
+            onClick={() => setSplitMode('split')}
+            className={`py-1 text-xs font-medium rounded transition-all cursor-pointer ${
+              splitMode === 'split' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500 hover:text-slate-700'
             }`}
           >
-            <span className="text-brand w-4 shrink-0 text-center text-sm">{TYPE_ICON[layer.type]}</span>
-            <span
-              className={`flex-1 truncate text-xs ${layer.visible ? '' : 'text-faint'}`}
-              title={layer.name}
-            >
-              {layer.name}
-            </span>
-            {layer.crop && (
-              <span className="text-faint shrink-0 text-[10px]" title="该图层已裁剪">
-                已裁剪
-              </span>
-            )}
-            <span className="text-faint w-8 shrink-0 text-right text-[10px] tabular-nums">
-              {Math.round(layer.opacity * 100)}%
-            </span>
+            拆层
+          </button>
+          <button
+            type="button"
+            onClick={() => setSplitMode('merge')}
+            className={`py-1 text-xs font-medium rounded transition-all cursor-pointer ${
+              splitMode === 'merge' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            成层
+          </button>
+        </div>
+      </div>
 
-            {layer.type === 'text' && onEditText && (
-              <Tooltip title="改文案">
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<EditOutlined />}
-                  disabled={busy}
-                  aria-label={`改文案：${layer.name}`}
-                  className="h-6! w-6! shrink-0"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onEditText(layer.id)
-                  }}
-                />
-              </Tooltip>
-            )}
+      {/* 图层列表卡片 */}
+      {layers.length === 0 ? (
+        <p className="text-slate-400 m-0 text-xs py-2 text-center">暂无图层</p>
+      ) : (
+        <div className="space-y-1">
+          {layers.map((layer, index) => {
+            const active = layer.id === doc.active_layer_id
+            const selected = layer.id === selectedId
+            const isBase = index === layers.length - 1
 
-            {layer.type === 'image' && !layer.visible && (
-              <Tooltip title="设为当前图（其余候选图隐藏）">
-                <Button
-                  size="small"
-                  type="text"
-                  icon={<StarOutlined />}
-                  disabled={busy}
-                  aria-label={`设为当前图：${layer.name}`}
-                  className="h-6! w-6! shrink-0"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onSwitchCurrent(layer.id)
-                  }}
-                />
-              </Tooltip>
-            )}
-
-            <Tooltip title={layer.visible ? '隐藏' : '显示'}>
-              <Button
-                size="small"
-                type="text"
-                icon={layer.visible ? <EyeOutlined /> : <EyeInvisibleOutlined />}
-                disabled={busy}
-                aria-label={layer.visible ? `隐藏图层：${layer.name}` : `显示图层：${layer.name}`}
-                className="h-6! w-6! shrink-0"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onToggleVisible(layer.id, !layer.visible)
+            return (
+              <div
+                key={layer.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect?.(layer.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault()
+                    onSelect?.(layer.id)
+                  }
                 }}
-              />
-            </Tooltip>
-          </div>
-        )
-      })}
+                aria-pressed={selected}
+                className={`flex h-11 cursor-pointer items-center gap-2 rounded-lg border px-2.5 transition-all duration-150 ${
+                  selected
+                    ? 'border-blue-400 bg-blue-50/70 shadow-2xs'
+                    : active
+                      ? 'border-blue-200 bg-blue-50/30'
+                      : 'border-slate-200/80 bg-white hover:border-slate-300 hover:bg-slate-50/80'
+                }`}
+              >
+                {/* 图层微缩图/图标占位 */}
+                <div className="h-7 w-7 rounded bg-slate-900 border border-slate-800 flex items-center justify-center shrink-0 text-slate-300 text-xs">
+                  {TYPE_ICON[layer.type]}
+                </div>
+
+                <div className="flex min-w-0 flex-1 flex-col justify-center">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className={`truncate text-xs font-medium ${layer.visible ? 'text-slate-800' : 'text-slate-400 line-through'}`}
+                      title={layer.name}
+                    >
+                      {layer.name}
+                    </span>
+                    {isBase && (
+                      <span className="text-[9px] text-slate-400 font-mono">已锁定</span>
+                    )}
+                  </div>
+                  {layer.crop && (
+                    <span className="text-slate-400 text-[10px] leading-tight">已裁剪</span>
+                  )}
+                </div>
+
+                <span className="text-slate-400 w-8 shrink-0 text-right text-[10px] tabular-nums font-mono">
+                  {Math.round(layer.opacity * 100)}%
+                </span>
+
+                {layer.type === 'text' && onEditText && (
+                  <Tooltip title="改文案">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<EditOutlined />}
+                      disabled={busy}
+                      className="h-6! w-6! shrink-0 text-slate-500 hover:text-slate-800"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onEditText(layer.id)
+                      }}
+                    />
+                  </Tooltip>
+                )}
+
+                {layer.type === 'image' && !layer.visible && (
+                  <Tooltip title="设为当前图">
+                    <Button
+                      size="small"
+                      type="text"
+                      icon={<StarOutlined />}
+                      disabled={busy}
+                      className="h-6! w-6! shrink-0 text-amber-500"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        onSwitchCurrent(layer.id)
+                      }}
+                    />
+                  </Tooltip>
+                )}
+
+                <Tooltip title={layer.visible ? '隐藏' : '显示'}>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={layer.visible ? <EyeOutlined className="text-slate-500" /> : <EyeInvisibleOutlined className="text-slate-300" />}
+                    disabled={busy}
+                    className="h-6! w-6! shrink-0"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      onToggleVisible(layer.id, !layer.visible)
+                    }}
+                  />
+                </Tooltip>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
+

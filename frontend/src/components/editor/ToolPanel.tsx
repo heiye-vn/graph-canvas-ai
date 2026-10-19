@@ -1,16 +1,13 @@
 /**
- * 工具面板。
+ * 工具面板 —— 动态参数表单卡片。
  *
- * 表单是**按元数据渲染**的：字段类型、范围、默认值都来自 `/api/tools`。
- * 这里唯一的领域知识是「每种 JSON 类型该用哪个控件」——
- * 一旦开始为某个具体工具写分支（if tool === 'adjust_color'），
- * 就又回到了「加工具要改前端」的老路。
+ * 当顶栏或外部选中工具时自适应展示表单，未选中时保持克制，避免破坏工作台的信息层级。
  */
 
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Empty, Input, InputNumber, Select, Switch, Tooltip } from 'antd'
-import { LockOutlined, ThunderboltOutlined } from '@ant-design/icons'
+import { Button, Input, InputNumber, Select, Switch, Tooltip } from 'antd'
+import { CloseOutlined, LockOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons'
 
 import { invokeTool, listTools } from '@/api/tools'
 import type { ToolParamMeta } from '@/api/tools'
@@ -22,10 +19,8 @@ export default function ToolPanel({
   onQueuedRun,
 }: {
   sessionId: string
-  /** 外部（快捷工具条）选中的工具；不传则用面板自己的下拉 */
   selected?: string | null
   onSelect?: (name: string) => void
-  /** 排队型工具（局部编辑等）提交成功：外层凭 run_id 挂进度条并自动采用 */
   onQueuedRun?: (runId: string, tool: string) => void
 }) {
   const queryClient = useQueryClient()
@@ -34,7 +29,6 @@ export default function ToolPanel({
   const [localName, setLocalName] = useState<string | null>(null)
   const [values, setValues] = useState<Record<string, unknown>>({})
 
-  // 受控优先：快捷工具条点了谁，这里就显示谁的表单
   const toolName = selected ?? localName
 
   const tool = useMemo(
@@ -42,9 +36,6 @@ export default function ToolPanel({
     [data, toolName],
   )
 
-  // agent_hidden 字段（mask_asset_id / revision 这类内部 id）**不渲染表单**：
-  // 它们由服务端按会话回填，显示成两个锁住的空输入框只会让用户困惑
-  // 「这个空框要我填什么」。表单只出现用户真正需要填的东西。
   const visibleParams = useMemo(
     () => (tool?.params ?? []).filter((param) => !param.agent_hidden),
     [tool],
@@ -59,67 +50,91 @@ export default function ToolPanel({
     },
   })
 
-  if (isLoading) return <Empty description="加载工具…" />
-  if (!data || data.items.length === 0) return <Empty description="后端没有注册任何工具" />
+  if (isLoading) return null
+  if (!data || data.items.length === 0) return null
+
+  if (!tool) {
+    return (
+      <div className="rounded-md border border-slate-200/80 bg-slate-50/50 p-2 text-xs text-slate-500 flex items-center justify-between">
+        <span className="flex items-center gap-1.5 text-slate-500">
+          <ToolOutlined />
+          <span>更多高级工具</span>
+        </span>
+        <Select<string>
+          size="small"
+          className="w-32"
+          placeholder="选择工具…"
+          value={undefined}
+          onChange={(value: string) => {
+            setLocalName(value)
+            setValues({})
+            onSelect?.(value)
+          }}
+          options={data.items.map((item) => ({
+            value: item.name,
+            label: item.label,
+          }))}
+        />
+
+      </div>
+    )
+  }
 
   return (
-    <div>
-      <Select
-        className="w-full"
-        placeholder="选择一个工具"
-        value={toolName}
-        onChange={(value) => {
-          setLocalName(value)
-          setValues({})
-          onSelect?.(value)
-        }}
-        options={data.items.map((item) => ({
-          value: item.name,
-          label: `${item.label} · ${item.description}`,
-        }))}
-      />
-
-      {tool && (
-        <div className="mt-4 space-y-3">
-          {visibleParams.length === 0 && (
-            <p className="text-faint m-0 text-xs">
-              这个工具不需要填参数
-              {tool.name.startsWith('erase_') || tool.name === 'replace_region'
-                ? '，作用范围 = 当前选区（顶栏「点选 / 笔刷」生成）'
-                : ''}
-              。
-            </p>
-          )}
-          {visibleParams.map((param) => (
-            <ParamField
-              key={param.name}
-              param={param}
-              value={values[param.name] ?? param.default ?? undefined}
-              onChange={(value) => setValues((prev) => ({ ...prev, [param.name]: value }))}
-            />
-          ))}
-
-          <Button
-            block
-            icon={<ThunderboltOutlined />}
-            loading={invoke.isPending}
-            onClick={() => invoke.mutate()}
-          >
-            执行
-          </Button>
-
-          {invoke.data && <SuccessHint text={invoke.data.message} />}
-          {invoke.isError && (
-            <p className="text-danger text-xs">{(invoke.error as Error).message}</p>
-          )}
+    <div className="rounded-lg border border-blue-200 bg-blue-50/20 p-2.5 text-xs shadow-2xs space-y-2.5">
+      <div className="flex items-center justify-between border-b border-blue-100 pb-1.5">
+        <div className="flex items-center gap-1.5">
+          <span className="font-semibold text-slate-800">{tool.label}</span>
+          <span className="text-[10px] text-slate-400 font-mono">({tool.name})</span>
         </div>
+        <button
+          type="button"
+          onClick={() => {
+            setLocalName(null)
+            onSelect?.('')
+          }}
+          className="text-slate-400 hover:text-slate-600 cursor-pointer"
+        >
+          <CloseOutlined className="text-[10px]" />
+        </button>
+      </div>
+
+      {visibleParams.length === 0 ? (
+        <p className="text-slate-400 m-0 text-[11px] leading-relaxed">
+          该工具无需输入参数
+          {tool.name.startsWith('erase_') || tool.name === 'replace_region'
+            ? '，执行时将直接作用于当前选区。'
+            : '，点击执行即可。'}
+        </p>
+      ) : (
+        visibleParams.map((param) => (
+          <ParamField
+            key={param.name}
+            param={param}
+            value={values[param.name] ?? param.default ?? undefined}
+            onChange={(value) => setValues((prev) => ({ ...prev, [param.name]: value }))}
+          />
+        ))
+      )}
+
+      <Button
+        block
+        type="primary"
+        size="small"
+        icon={<ThunderboltOutlined />}
+        loading={invoke.isPending}
+        onClick={() => invoke.mutate()}
+        className="h-7! text-xs! font-medium rounded!"
+      >
+        执行 {tool.label}
+      </Button>
+
+      {invoke.data && <p className="text-emerald-600 text-xs m-0">{invoke.data.message}</p>}
+      {invoke.isError && (
+        <p className="text-red-500 text-xs m-0">{(invoke.error as Error).message}</p>
       )}
     </div>
   )
-}
-
-function SuccessHint({ text }: { text: string }) {
-  return <p className="text-success text-xs">{text}</p>
 }
 
 function ParamField({
@@ -131,17 +146,14 @@ function ParamField({
   value: unknown
   onChange: (value: unknown) => void
 }) {
-  const suffix = param.agent_hidden ? '（由界面选择，模型不可见）' : ''
-
   return (
     <label className="block">
-      <span className="text-muted mb-1 flex items-center gap-1 text-xs">
+      <span className="text-slate-600 mb-1 flex items-center gap-1 text-xs font-medium">
         {param.label}
-        {param.required && <span className="text-danger">*</span>}
+        {param.required && <span className="text-red-500">*</span>}
         {param.agent_hidden && (
-          <Tooltip title="这个字段不会出现在给模型的 schema 里，避免模型编造 id">
-            {/* 图标一律走图标库：emoji 当图标在跨平台渲染里高度和基线都不可控 */}
-            <LockOutlined className="text-faint" />
+          <Tooltip title="模型不可见的内部字段">
+            <LockOutlined className="text-slate-400 text-[10px]" />
           </Tooltip>
         )}
       </span>
@@ -149,9 +161,8 @@ function ParamField({
       <FieldControl param={param} value={value} onChange={onChange} />
 
       {param.description && (
-        <span className="text-faint mt-1 block text-[11px]">
+        <span className="text-slate-400 mt-0.5 block text-[10px] leading-tight">
           {param.description}
-          {suffix}
         </span>
       )}
     </label>
@@ -174,6 +185,7 @@ function FieldControl({
   if (param.type === 'enum' && param.enum) {
     return (
       <Select
+        size="small"
         className="w-full"
         value={value as string}
         onChange={onChange}
@@ -185,6 +197,7 @@ function FieldControl({
   if (param.type === 'number' || param.type === 'integer') {
     return (
       <InputNumber
+        size="small"
         className="w-full"
         value={value as number | undefined}
         onChange={(next) => onChange(next)}
@@ -197,10 +210,12 @@ function FieldControl({
 
   return (
     <Input
+      size="small"
       value={(value as string) ?? ''}
       onChange={(e) => onChange(e.target.value)}
       placeholder={param.required ? '必填' : '可留空'}
     />
   )
 }
+
 

@@ -1,17 +1,11 @@
 /**
- * 编辑记录（M5 撤销栈的 UI）。
+ * 编辑记录 —— 紧凑历史撤销时间线（对齐参考图1标准）。
  *
- * 两个开关的可用性来自**服务端指针**而不是本地有没有改动：刷新之后能不能撤，
- * 得问服务端。所以 can_undo / can_redo 必须跟着每次 undo/redo 的响应一起回来 ——
- * 前端如果为了显示按钮状态再发一次 GET，在快速连点时会出现
- * 「按钮可点但请求 409」的窗口。
- *
- * 历史列表刻意只显示标签与位置 —— 快照是服务端的东西，
- * 前端要还原某一步就退到那一步，不必自己拼文档。
+ * 两端对齐排版，操作名居左，序号/状态居右。
  */
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, List, Tag, Tooltip } from 'antd'
+import { Button, Tooltip } from 'antd'
 import { RedoOutlined, UndoOutlined } from '@ant-design/icons'
 
 import { getHistory, redoStep, undoStep } from '@/api/history'
@@ -32,7 +26,6 @@ export default function HistoryPanel({ sessionId }: { sessionId: string }) {
     can_redo: boolean
     seq: number
   }) {
-    // 服务端返回的文档就是新的真相源，顺带把指针状态也一起吸收
     queryClient.setQueryData(['session', sessionId], result.session)
     queryClient.setQueryData(['history', sessionId], (prev: unknown) => ({
       seq: result.seq,
@@ -57,29 +50,31 @@ export default function HistoryPanel({ sessionId }: { sessionId: string }) {
   const items = state?.items ?? []
 
   return (
-    <div>
+    <div className="select-none text-xs">
       <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-muted m-0 text-xs font-medium">编辑记录</h3>
-        <div className="flex gap-1">
-          <Tooltip title={state?.can_undo ? '撤销一步' : '已经退到最初状态'}>
+        <span className="text-slate-600 font-medium">编辑记录</span>
+        <div className="flex items-center gap-1">
+          <Tooltip title={state?.can_undo ? '撤销 (Ctrl+Z)' : '无撤销项'}>
             <Button
               size="small"
               type="text"
-              icon={<UndoOutlined />}
+              icon={<UndoOutlined className="text-xs" />}
               disabled={!state?.can_undo}
               loading={undo.isPending}
               onClick={() => undo.mutate()}
+              className="h-6! w-6! text-slate-500 hover:text-slate-800"
               aria-label="撤销"
             />
           </Tooltip>
-          <Tooltip title={state?.can_redo ? '重做一步' : '没有可重做的步骤'}>
+          <Tooltip title={state?.can_redo ? '重做 (Ctrl+Y)' : '无重选项'}>
             <Button
               size="small"
               type="text"
-              icon={<RedoOutlined />}
+              icon={<RedoOutlined className="text-xs" />}
               disabled={!state?.can_redo}
               loading={redo.isPending}
               onClick={() => redo.mutate()}
+              className="h-6! w-6! text-slate-500 hover:text-slate-800"
               aria-label="重做"
             />
           </Tooltip>
@@ -87,35 +82,36 @@ export default function HistoryPanel({ sessionId }: { sessionId: string }) {
       </div>
 
       {items.length === 0 ? (
-        <p className="text-faint m-0 text-xs">还没有任何编辑动作</p>
+        <p className="text-slate-400 m-0 py-1.5 text-[11px]">暂无操作记录</p>
       ) : (
-        <List
-          size="small"
-          split={false}
-          dataSource={items}
-          renderItem={(entry) => {
-            // 指针之后的条目还没发生（可重做），指针位置之前的已经撤过去了
+        <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+          {items.map((entry) => {
             const current = entry.seq === state?.seq
             const undone = entry.seq > (state?.seq ?? 0)
+
             return (
-              <List.Item className="px-1! py-1!">
-                <span className="flex min-w-0 items-center gap-1.5 text-xs">
-                  <Tag
-                    bordered={false}
-                    color={current ? 'processing' : 'default'}
-                    className="m-0 shrink-0"
-                  >
-                    {entry.seq}
-                  </Tag>
-                  <span className={`truncate ${undone ? 'text-faint line-through' : ''}`}>
-                    {entry.label}
-                  </span>
+              <div
+                key={entry.seq}
+                className={`flex items-center justify-between py-1 px-1.5 rounded transition-colors ${
+                  current
+                    ? 'bg-blue-50/80 text-blue-900 font-medium'
+                    : undone
+                      ? 'text-slate-400 opacity-60'
+                      : 'text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span className={`truncate text-xs ${undone ? 'line-through' : ''}`}>
+                  {entry.label}
                 </span>
-              </List.Item>
+                <span className="font-mono text-[10px] text-slate-400 tabular-nums shrink-0 ml-2">
+                  #{entry.seq}
+                </span>
+              </div>
             )
-          }}
-        />
+          })}
+        </div>
       )}
     </div>
   )
 }
+

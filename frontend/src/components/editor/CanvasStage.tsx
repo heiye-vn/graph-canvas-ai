@@ -21,22 +21,35 @@
  * 平时保持 listening=false 不干扰画布渲染。
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type Konva from 'konva'
-import type { MutableRefObject } from 'react'
-import { Circle, Group, Image as KonvaImage, Layer as KonvaLayer, Line, Rect, Stage, Text as KonvaText } from 'react-konva'
+import { useEffect, useMemo, useRef, useState } from "react";
+import type Konva from "konva";
+import type { MutableRefObject } from "react";
+import {
+  Circle,
+  Group,
+  Image as KonvaImage,
+  Layer as KonvaLayer,
+  Line,
+  Rect,
+  Stage,
+  Text as KonvaText,
+} from "react-konva";
 
-import type { LayerCanvas, LayerDocument, Layer as LayerModel } from '@/domain/layerDoc'
-import type { SelectionMarker } from '@/api/sessions'
-import { layerRect, layerSourceAssetId } from '@/domain/layerDoc'
-import { adjustedSource } from './adjustedSource'
-import type { ImageMap } from './useLoadedImages'
+import type {
+  LayerCanvas,
+  LayerDocument,
+  Layer as LayerModel,
+} from "@/domain/layerDoc";
+import type { SelectionMarker } from "@/api/sessions";
+import { layerRect, layerSourceAssetId } from "@/domain/layerDoc";
+import { adjustedSource } from "./adjustedSource";
+import type { ImageMap } from "./useLoadedImages";
 
-export type SelectionMode = 'off' | 'point' | 'brush'
+export type SelectionMode = "off" | "point" | "brush";
 
 interface NormalizedPoint {
-  x: number
-  y: number
+  x: number;
+  y: number;
 }
 
 /**
@@ -50,23 +63,23 @@ function LayerNode({
   canvas,
   image,
 }: {
-  layer: LayerModel
-  canvas: LayerCanvas
-  image: HTMLImageElement
+  layer: LayerModel;
+  canvas: LayerCanvas;
+  image: HTMLImageElement;
 }) {
-  const rect = layerRect(layer, canvas)
+  const rect = layerRect(layer, canvas);
 
   // 依赖写具体的字段而不是整层的对象引用：文档每次保存都是新对象，
   // 用对象做依赖会让所有图层在任意一次改动后全部重算
   const source = useMemo(
     () => adjustedSource(image, layer.adjustments),
     [image, layer.adjustments],
-  )
+  );
 
-  const crop = layer.crop
+  const crop = layer.crop;
   return (
     <KonvaImage
-      image={source as Konva.ImageConfig['image']}
+      image={source as Konva.ImageConfig["image"]}
       x={layer.transform.flip_x ? rect.x + rect.width : rect.x}
       y={layer.transform.flip_y ? rect.y + rect.height : rect.y}
       width={rect.width}
@@ -81,28 +94,28 @@ function LayerNode({
           : undefined
       }
     />
-  )
+  );
 }
 
 /** 遮罩 overlay 图：后端下发的半透明 PNG，随选区生成/失效整体出现或消失。 */
 function MaskOverlay({ url }: { url: string }) {
-  const [image, setImage] = useState<HTMLImageElement | null>(null)
+  const [image, setImage] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
     if (!url) {
-      setImage(null)
-      return
+      setImage(null);
+      return;
     }
-    const img = new window.Image()
-    img.onload = () => setImage(img)
-    img.src = url
+    const img = new window.Image();
+    img.onload = () => setImage(img);
+    img.src = url;
     return () => {
-      img.onload = null
-    }
-  }, [url])
+      img.onload = null;
+    };
+  }, [url]);
 
-  if (!image) return null
-  return <KonvaImage image={image} opacity={0.45} listening={false} />
+  if (!image) return null;
+  return <KonvaImage image={image} opacity={0.45} listening={false} />;
 }
 
 /**
@@ -113,12 +126,19 @@ function MaskOverlay({ url }: { url: string }) {
  * 字体栈把 Windows 的微软雅黑放最前 —— 服务端 Pillow 在本机命中的
  * 就是 msyh.ttc，两边同字体才能保证「所见即拍平所得」。
  */
-const CANVAS_FONT_STACK = '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif'
+const CANVAS_FONT_STACK =
+  '"Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
 
-function TextNode({ layer, canvas }: { layer: LayerModel; canvas: LayerCanvas }) {
-  const rect = layerRect(layer, canvas)
-  const text = layer.text
-  if (!text) return null
+function TextNode({
+  layer,
+  canvas,
+}: {
+  layer: LayerModel;
+  canvas: LayerCanvas;
+}) {
+  const rect = layerRect(layer, canvas);
+  const text = layer.text;
+  if (!text) return null;
   return (
     <KonvaText
       x={rect.x}
@@ -135,7 +155,7 @@ function TextNode({ layer, canvas }: { layer: LayerModel; canvas: LayerCanvas })
       rotation={rect.rotation}
       listening={false}
     />
-  )
+  );
 }
 
 export default function CanvasStage({
@@ -145,7 +165,7 @@ export default function CanvasStage({
   zoom = null,
   stageRef,
   onScaleChange,
-  selectionMode = 'off',
+  selectionMode = "off",
   brushRadius = 0.03,
   maskUrl = null,
   markers = [],
@@ -154,188 +174,217 @@ export default function CanvasStage({
   onPointClick,
   onStrokeEnd,
 }: {
-  doc: LayerDocument
-  images: ImageMap
-  loading?: boolean
+  doc: LayerDocument;
+  images: ImageMap;
+  loading?: boolean;
   /** null = 贴齐容器宽；数字 = 固定倍率（1 = 100%） */
-  zoom?: number | null
+  zoom?: number | null;
   /** 导出要用 Stage 本体；由父级持有（视图状态不进文档） */
-  stageRef?: MutableRefObject<Konva.Stage | null>
+  stageRef?: MutableRefObject<Konva.Stage | null>;
   /** 实际生效的倍率回传给顶栏显示（fit 时的倍率只有这里算得出来） */
-  onScaleChange?: (scale: number) => void
-  selectionMode?: SelectionMode
+  onScaleChange?: (scale: number) => void;
+  selectionMode?: SelectionMode;
   /** 笔刷半径，相对画布短边的比例 */
-  brushRadius?: number
-  maskUrl?: string | null
-  markers?: SelectionMarker[]
-  selectionBusy?: boolean
+  brushRadius?: number;
+  maskUrl?: string | null;
+  markers?: SelectionMarker[];
+  selectionBusy?: boolean;
   /** 对比模式：临时隐藏这些图层（视图状态，不进文档、不影响导出以外的一切） */
-  hiddenLayerIds?: string[] | null
+  hiddenLayerIds?: string[] | null;
   /** 点选模式下的单击回调（归一化坐标） */
-  onPointClick?: (point: NormalizedPoint) => void
+  onPointClick?: (point: NormalizedPoint) => void;
   /** 笔刷模式下一笔结束的回调（归一化坐标序列） */
-  onStrokeEnd?: (points: NormalizedPoint[]) => void
+  onStrokeEnd?: (points: NormalizedPoint[]) => void;
 }) {
-  const boxRef = useRef<HTMLDivElement>(null)
-  const [boxWidth, setBoxWidth] = useState(0)
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [boxWidth, setBoxWidth] = useState(0);
   // 正在画的笔迹（文档像素坐标），mouseup 时归一化交出去
-  const [stroke, setStroke] = useState<NormalizedPoint[] | null>(null)
-  const drawingRef = useRef(false)
+  const [stroke, setStroke] = useState<NormalizedPoint[] | null>(null);
+  const drawingRef = useRef(false);
 
   // 容器宽度是唯一外部约束：编辑区旁边还有面板，写死宽度必然会溢出
   useEffect(() => {
-    const el = boxRef.current
-    if (!el) return
+    const el = boxRef.current;
+    if (!el) return;
     const observer = new ResizeObserver((entries) => {
-      setBoxWidth(entries[0]?.contentRect.width ?? 0)
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
-  }, [])
+      setBoxWidth(entries[0]?.contentRect.width ?? 0);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
-  const { width: canvasWidth, height: canvasHeight } = doc.canvas
+  const { width: canvasWidth, height: canvasHeight } = doc.canvas;
   const fitScale = useMemo(() => {
-    if (!boxWidth || !canvasWidth) return 0
-    return Math.min(boxWidth / canvasWidth, 1) // 小图不放大到糊
-  }, [boxWidth, canvasWidth])
-  const scale = zoom ?? fitScale
+    if (!boxWidth || !canvasWidth) return 0;
+    return Math.min(boxWidth / canvasWidth, 1); // 小图不放大到糊
+  }, [boxWidth, canvasWidth]);
+  const scale = zoom ?? fitScale;
 
   useEffect(() => {
-    if (scale > 0) onScaleChange?.(scale)
-  }, [scale, onScaleChange])
+    if (scale > 0) onScaleChange?.(scale);
+  }, [scale, onScaleChange]);
 
   // 选区模式切换时丢弃没画完的笔迹，避免上一次模式的残影
   useEffect(() => {
-    if (selectionMode !== 'brush') setStroke(null)
-  }, [selectionMode])
+    if (selectionMode !== "brush") setStroke(null);
+  }, [selectionMode]);
 
   // layers 数组从下到上，直接顺序渲染即可（不需要翻转 —— 翻转是为了给面板看）
-  const hidden = useMemo(() => new Set(hiddenLayerIds ?? []), [hiddenLayerIds])
-  const drawable = doc.layers.filter((layer) => layer.visible && !hidden.has(layer.id))
+  const hidden = useMemo(() => new Set(hiddenLayerIds ?? []), [hiddenLayerIds]);
+  const drawable = doc.layers.filter(
+    (layer) => layer.visible && !hidden.has(layer.id),
+  );
 
   function pointerNormalized(): NormalizedPoint | null {
-    const stage = stageRef?.current
-    const pos = stage?.getPointerPosition()
-    if (!pos || scale === 0) return null
-    return { x: pos.x / scale / canvasWidth, y: pos.y / scale / canvasHeight }
+    const stage = stageRef?.current;
+    const pos = stage?.getPointerPosition();
+    if (!pos || scale === 0) return null;
+    return { x: pos.x / scale / canvasWidth, y: pos.y / scale / canvasHeight };
   }
 
   function handleClick() {
-    if (selectionMode !== 'point' || selectionBusy || !onPointClick) return
-    const point = pointerNormalized()
-    if (point) onPointClick(point)
+    if (selectionMode !== "point" || selectionBusy || !onPointClick) return;
+    const point = pointerNormalized();
+    if (point) onPointClick(point);
   }
 
   function handleMouseDown() {
-    if (selectionMode !== 'brush' || selectionBusy || !onStrokeEnd) return
-    drawingRef.current = true
-    const point = pointerNormalized()
-    if (point) setStroke([point])
+    if (selectionMode !== "brush" || selectionBusy || !onStrokeEnd) return;
+    drawingRef.current = true;
+    const point = pointerNormalized();
+    if (point) setStroke([point]);
   }
 
   function handleMouseMove() {
-    if (!drawingRef.current) return
-    const point = pointerNormalized()
-    if (point) setStroke((prev) => (prev ? [...prev, point] : [point]))
+    if (!drawingRef.current) return;
+    const point = pointerNormalized();
+    if (point) setStroke((prev) => (prev ? [...prev, point] : [point]));
   }
 
   function handleMouseUp() {
-    if (!drawingRef.current) return
-    drawingRef.current = false
+    if (!drawingRef.current) return;
+    drawingRef.current = false;
     if (stroke && stroke.length > 0 && onStrokeEnd) {
-      onStrokeEnd(stroke)
+      onStrokeEnd(stroke);
     }
-    setStroke(null)
+    setStroke(null);
   }
 
-  const brushWidthPx = Math.max(2, Math.min(canvasWidth, canvasHeight) * brushRadius)
-  const markerRadius = Math.max(4, Math.min(canvasWidth, canvasHeight) * 0.008)
+  const brushWidthPx = Math.max(
+    2,
+    Math.min(canvasWidth, canvasHeight) * brushRadius,
+  );
+  const markerRadius = Math.max(4, Math.min(canvasWidth, canvasHeight) * 0.008);
 
   return (
     // 放大后要能拖动滚动条看细节，容器自身交给外层布局滚
-    <div ref={boxRef} className="relative w-full overflow-auto">
+    <div
+      ref={boxRef}
+      className="relative w-full flex justify-center items-center overflow-auto py-2"
+    >
       {scale === 0 ? (
         <div className="bg-soft rounded-card h-64 w-full animate-pulse" />
       ) : (
-        <Stage
-          ref={stageRef}
-          width={canvasWidth * scale}
-          height={canvasHeight * scale}
-          scaleX={scale}
-          scaleY={scale}
-          onClick={handleClick}
-          onTap={handleClick}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onTouchMove={handleMouseMove}
-          onTouchEnd={handleMouseUp}
-          style={{ cursor: selectionMode === 'off' ? 'default' : 'crosshair' }}
-        >
-          <KonvaLayer listening={false}>
-            {doc.canvas.background && (
-              <Rect x={0} y={0} width={canvasWidth} height={canvasHeight} fill={doc.canvas.background} />
-            )}
-
-            {drawable.map((layer) => {
-              // M7 起文字层直接上画布（此前只在面板展示）——拆层产出的
-              // 文字层必须看得到，「文案可改且位置不变」才有验证对象
-              if (layer.type === 'text') {
-                return <TextNode key={layer.id} layer={layer} canvas={doc.canvas} />
-              }
-              const assetId = layerSourceAssetId(layer)
-              const image = assetId ? images[assetId] : undefined
-              if (!image) return null
-              return (
-                <LayerNode
-                  key={layer.id}
-                  layer={layer}
-                  canvas={doc.canvas}
-                  image={image}
-                />
-              )
-            })}
-
-            {/* 选区 overlay 与提示点：渲染属于画布，状态不属于文档 */}
-            <MaskOverlay url={maskUrl ?? ''} />
-            {markers.map((marker) => (
-              <Group key={marker.index} listening={false}>
-                <Circle
-                  x={marker.x * canvasWidth}
-                  y={marker.y * canvasHeight}
-                  radius={markerRadius}
-                  fill="#ffffff"
-                  stroke={SELECTION_COLOR}
-                  strokeWidth={2}
-                />
-                <Circle
-                  x={marker.x * canvasWidth}
-                  y={marker.y * canvasHeight}
-                  radius={markerRadius * 0.4}
-                  fill={SELECTION_COLOR}
-                />
-              </Group>
-            ))}
-          </KonvaLayer>
-
-          {/* 正在画的笔迹预览：纯视觉反馈，松手才交给服务端 */}
-          {stroke && stroke.length > 0 && (
+        <div className="rounded-md shadow-2xl ring-1 ring-white/10 overflow-hidden shrink-0">
+          <Stage
+            ref={stageRef}
+            width={canvasWidth * scale}
+            height={canvasHeight * scale}
+            scaleX={scale}
+            scaleY={scale}
+            onClick={handleClick}
+            onTap={handleClick}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onTouchMove={handleMouseMove}
+            onTouchEnd={handleMouseUp}
+            style={{
+              cursor: selectionMode === "off" ? "default" : "crosshair",
+            }}
+          >
             <KonvaLayer listening={false}>
-              <Line
-                points={stroke.flatMap((p) => [p.x * canvasWidth, p.y * canvasHeight])}
-                stroke="rgba(95, 152, 173, 0.55)"
-                strokeWidth={brushWidthPx}
-                lineCap="round"
-                lineJoin="round"
-              />
+              {doc.canvas.background && (
+                <Rect
+                  x={0}
+                  y={0}
+                  width={canvasWidth}
+                  height={canvasHeight}
+                  fill={doc.canvas.background}
+                />
+              )}
+
+              {drawable.map((layer) => {
+                // M7 起文字层直接上画布（此前只在面板展示）——拆层产出的
+                // 文字层必须看得到，「文案可改且位置不变」才有验证对象
+                if (layer.type === "text") {
+                  return (
+                    <TextNode
+                      key={layer.id}
+                      layer={layer}
+                      canvas={doc.canvas}
+                    />
+                  );
+                }
+                const assetId = layerSourceAssetId(layer);
+                const image = assetId ? images[assetId] : undefined;
+                if (!image) return null;
+                return (
+                  <LayerNode
+                    key={layer.id}
+                    layer={layer}
+                    canvas={doc.canvas}
+                    image={image}
+                  />
+                );
+              })}
+
+              {/* 选区 overlay 与提示点：渲染属于画布，状态不属于文档 */}
+              <MaskOverlay url={maskUrl ?? ""} />
+              {markers.map((marker) => (
+                <Group key={marker.index} listening={false}>
+                  <Circle
+                    x={marker.x * canvasWidth}
+                    y={marker.y * canvasHeight}
+                    radius={markerRadius}
+                    fill="#ffffff"
+                    stroke={SELECTION_COLOR}
+                    strokeWidth={2}
+                  />
+                  <Circle
+                    x={marker.x * canvasWidth}
+                    y={marker.y * canvasHeight}
+                    radius={markerRadius * 0.4}
+                    fill={SELECTION_COLOR}
+                  />
+                </Group>
+              ))}
             </KonvaLayer>
-          )}
-        </Stage>
+
+            {/* 正在画的笔迹预览：纯视觉反馈，松手才交给服务端 */}
+            {stroke && stroke.length > 0 && (
+              <KonvaLayer listening={false}>
+                <Line
+                  points={stroke.flatMap((p) => [
+                    p.x * canvasWidth,
+                    p.y * canvasHeight,
+                  ])}
+                  stroke="rgba(95, 152, 173, 0.55)"
+                  strokeWidth={brushWidthPx}
+                  lineCap="round"
+                  lineJoin="round"
+                />
+              </KonvaLayer>
+            )}
+          </Stage>
+        </div>
       )}
 
       {loading && (
-        <span className="text-faint absolute top-3 left-3 text-xs">素材加载中…</span>
+        <span className="text-faint absolute top-3 left-3 text-xs">
+          素材加载中…
+        </span>
       )}
       {selectionBusy && (
         <span className="border-line bg-paper text-muted absolute top-3 right-3 rounded-card border px-2 py-1 text-xs shadow-sm">
@@ -343,7 +392,7 @@ export default function CanvasStage({
         </span>
       )}
     </div>
-  )
+  );
 }
 
-const SELECTION_COLOR = '#5f98ad'
+const SELECTION_COLOR = "#5f98ad";

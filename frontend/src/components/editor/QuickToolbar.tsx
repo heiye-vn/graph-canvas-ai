@@ -1,24 +1,37 @@
 /**
- * 顶栏快捷工具条 —— 高频工具一键直达。
+ * 顶栏快捷工具条 —— 高频工具一键直达（对齐参考项目图1标准）。
  *
- * 与 ToolPanel 的分工：这里是**入口**（点一下选中该工具），
- * 参数表单仍然只有一份（右侧 ToolPanel），自动跟着选中项切换。
- *
- * 16 个工具全平铺会把顶栏挤成两行（上一版截图的问题），
- * 所以规则是：**注册表前 8 个平铺，其余收进「更多」下拉**（按 group 分组展示）。
- * 这个 8 是展示策略不是工具身份，增删工具仍然不用改前端。
- *
- * 刻意不放分组文字标签：分组信息挪进下拉的 group 标题和按钮 tooltip，
- * 顶栏每个像素都要为「可点的工具」服务。
+ * 紧凑微胶囊按钮排布，高密度信息架构。
  */
 
 import { useMemo } from 'react'
-import { Button, Dropdown, Tooltip } from 'antd'
-import { DownOutlined } from '@ant-design/icons'
+import { Dropdown, Tooltip } from 'antd'
+import {
+  BgColorsOutlined,
+  ClearOutlined,
+  DownOutlined,
+  ExpandOutlined,
+  RotateRightOutlined,
+  ScissorOutlined,
+  SwapOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons'
 
 import type { ToolMeta } from '@/api/tools'
 
-const FLAT_LIMIT = 8
+const FLAT_LIMIT = 9
+
+/** 常用高频工具的图标映射，增强专业设计工具感 */
+const TOOL_ICONS: Record<string, React.ReactNode> = {
+  crop: <ScissorOutlined />,
+  flip_horizontal: <SwapOutlined />,
+  flip_vertical: <SwapOutlined className="rotate-90" />,
+  rotate_layer: <RotateRightOutlined />,
+  remove_background: <ClearOutlined />,
+  expand_image: <ExpandOutlined />,
+  super_resolution: <ThunderboltOutlined />,
+  adjust_color: <BgColorsOutlined />,
+}
 
 export default function QuickToolbar({
   tools,
@@ -29,7 +42,6 @@ export default function QuickToolbar({
   selected: string | null
   onSelect: (name: string) => void
 }) {
-  // 注册顺序即展示顺序：builtins 里相邻注册的工具天然同组
   const flat = useMemo(() => tools.slice(0, FLAT_LIMIT), [tools])
   const rest = useMemo(() => tools.slice(FLAT_LIMIT), [tools])
 
@@ -55,21 +67,29 @@ export default function QuickToolbar({
   let previousGroup: string | null = null
 
   return (
-    <div className="flex flex-nowrap items-center gap-0.5">
+    <div className="flex flex-nowrap items-center gap-1 overflow-x-auto py-0.5 scrollbar-none">
       {flat.map((tool) => {
         const divider = previousGroup !== null && tool.group !== previousGroup
         previousGroup = tool.group
+        const isSelected = selected === tool.name
+        const icon = TOOL_ICONS[tool.name]
+
         return (
-          <div key={tool.name} className="flex shrink-0 items-center gap-0.5">
-            {divider && <span className="bg-line mx-1 h-4 w-px" aria-hidden />}
-            <Tooltip title={tool.description}>
-              <Button
-                size="small"
-                type={selected === tool.name ? 'primary' : 'text'}
+          <div key={tool.name} className="flex shrink-0 items-center gap-1">
+            {divider && <span className="bg-slate-200 mx-1 h-3.5 w-px shrink-0" aria-hidden />}
+            <Tooltip title={tool.description} mouseEnterDelay={0.4}>
+              <button
+                type="button"
                 onClick={() => onSelect(tool.name)}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-all duration-150 cursor-pointer shrink-0 border ${
+                  isSelected
+                    ? 'bg-blue-50 text-blue-600 border-blue-200 shadow-xs'
+                    : 'bg-transparent text-slate-700 border-transparent hover:bg-slate-100 hover:text-slate-900'
+                }`}
               >
-                {tool.label}
-              </Button>
+                {icon && <span className="text-[11px] opacity-80">{icon}</span>}
+                <span className="whitespace-nowrap">{tool.label}</span>
+              </button>
             </Tooltip>
           </div>
         )
@@ -77,11 +97,16 @@ export default function QuickToolbar({
 
       {rest.length > 0 && (
         <Dropdown menu={moreMenu} trigger={['click']} placement="bottomRight">
-          <Button size="small" type="text" icon={<DownOutlined />}>
-            更多
-          </Button>
+          <button
+            type="button"
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 border border-transparent transition-all cursor-pointer shrink-0"
+          >
+            <span>更多</span>
+            <DownOutlined className="text-[9px]" />
+          </button>
         </Dropdown>
       )}
     </div>
   )
 }
+

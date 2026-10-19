@@ -1,15 +1,12 @@
 /**
- * 底部候选图条 —— 会话里所有图像层的缩略图。
+ * 底部版本/候选图胶卷条 —— 贯穿会话的全量版本与图像图层缩略图。
  *
- * 点击 = `switch_current_image`（目标可见、其余候选隐藏）。只列 image 层：
- * 文字层 / 形状层不是「候选图」，混进来只会让人误以为点它能切主图。
- *
- * 当前图的判定用 `visible` 而不是 active_layer_id：前者是 switch_current_image
- * 真正改的东西，后者在用户手动点了别的图层时会跟着变，两者会分叉。
+ * 废除单图隐藏限制：即便是初始底图也常驻底栏，确立生产力工具的核心视觉锚点。
+ * 胶卷抽屉采用专业级沉浸暗色，每个卡片附带操作标签与高亮激活态。
  */
 
 import { Tooltip } from 'antd'
-import { EyeInvisibleOutlined } from '@ant-design/icons'
+import { EyeInvisibleOutlined, PictureOutlined } from '@ant-design/icons'
 
 import type { LayerDocument } from '@/domain/layerDoc'
 import { layerSourceAssetId } from '@/domain/layerDoc'
@@ -27,39 +24,84 @@ export default function CandidateStrip({
   onSwitch: (layerId: string) => void
 }) {
   const candidates = doc.layers.filter((layer) => layer.type === 'image' && layer.source)
-  if (candidates.length <= 1) return null // 单张候选没有「切换」可言
 
   return (
-    <div className="border-line flex items-center gap-2 overflow-x-auto border-t px-3 py-2">
-      <span className="text-faint shrink-0 text-[11px]">候选图</span>
-      {candidates.map((layer) => {
-        const assetId = layerSourceAssetId(layer)
-        const url = assetId ? urls[assetId] : undefined
-        return (
-          <Tooltip key={layer.id} title={layer.name}>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => onSwitch(layer.id)}
-              className={`rounded-control relative h-12 w-12 shrink-0 overflow-hidden border transition-all ${
-                layer.visible
-                  ? 'border-brand ring-brand ring-1'
-                  : 'border-line hover:border-muted opacity-70 hover:opacity-100'
-              }`}
-              aria-label={layer.visible ? `当前图：${layer.name}` : `切换到 ${layer.name}`}
-            >
-              {url ? (
-                <img src={url} alt={layer.name} className="h-full w-full object-cover" />
-              ) : (
-                <span className="bg-soft block h-full w-full" />
-              )}
-              {!layer.visible && (
-                <EyeInvisibleOutlined className="absolute right-0.5 bottom-0.5 text-[10px] text-white drop-shadow" />
-              )}
-            </button>
-          </Tooltip>
-        )
-      })}
+    <div className="bg-[#121316] border-t border-[#23252a] px-4 py-2.5 flex items-center gap-3 shrink-0 select-none">
+      <div className="flex items-center gap-1.5 text-zinc-400 shrink-0 text-xs font-medium">
+        <PictureOutlined className="text-blue-400" />
+        <span className="tracking-wide">版本流水</span>
+        <span className="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded-full font-mono">
+          {candidates.length || 1}
+        </span>
+      </div>
+
+      <div className="h-4 w-px bg-zinc-800 shrink-0" />
+
+      <div className="flex items-center gap-2.5 overflow-x-auto py-0.5 min-w-0">
+        {candidates.length === 0 ? (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 text-xs">
+            <span>当前画布暂无图像层</span>
+          </div>
+        ) : (
+          candidates.map((layer, index) => {
+            const assetId = layerSourceAssetId(layer)
+            const url = assetId ? urls[assetId] : undefined
+            const isBase = index === 0
+            const active = layer.visible
+
+            return (
+              <Tooltip
+                key={layer.id}
+                title={
+                  <div className="text-xs">
+                    <p className="font-medium text-white">{layer.name}</p>
+                    <p className="text-zinc-400">{isBase ? '初始底图' : '编辑版本'} · 点击切换</p>
+                  </div>
+                }
+              >
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onSwitch(layer.id)}
+                  className={`group relative flex flex-col items-center justify-between rounded-md overflow-hidden transition-all duration-150 cursor-pointer ${
+                    active
+                      ? 'ring-2 ring-blue-500 shadow-md shadow-blue-500/20 bg-zinc-800'
+                      : 'border border-zinc-800 hover:border-zinc-600 bg-zinc-900 opacity-70 hover:opacity-100'
+                  }`}
+                  aria-label={active ? `当前图：${layer.name}` : `切换到 ${layer.name}`}
+                  style={{ width: '64px', height: '64px' }}
+                >
+                  <div className="relative w-full h-full flex items-center justify-center bg-black/40 overflow-hidden">
+                    {url ? (
+                      <img
+                        src={url}
+                        alt={layer.name}
+                        className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                      />
+                    ) : (
+                      <span className="block h-full w-full bg-zinc-800" />
+                    )}
+
+                    {!layer.visible && (
+                      <div className="absolute inset-0 bg-black/50 backdrop-blur-[1px] flex items-center justify-center">
+                        <EyeInvisibleOutlined className="text-zinc-400 text-xs" />
+                      </div>
+                    )}
+
+                    {/* 底部小标签药丸 */}
+                    <div className="absolute bottom-0 inset-x-0 bg-black/75 backdrop-blur-sm px-1 py-0.5 text-center">
+                      <p className="text-[10px] text-zinc-300 font-mono truncate leading-none">
+                        {isBase ? '底图' : layer.name.slice(0, 4)}
+                      </p>
+                    </div>
+                  </div>
+                </button>
+              </Tooltip>
+            )
+          })
+        )}
+      </div>
     </div>
   )
 }
+
