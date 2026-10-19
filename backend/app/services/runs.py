@@ -64,14 +64,18 @@ async def get_run(session: AsyncSession, user_id: uuid.UUID, run_id: uuid.UUID) 
 
 
 async def list_runs(
-    session: AsyncSession, user_id: uuid.UUID, limit: int = 50
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    limit: int = 50,
+    tool: str | None = None,
+    status: str | None = None,
 ) -> list[ToolRun]:
-    result = await session.execute(
-        select(ToolRun)
-        .where(ToolRun.user_id == user_id)
-        .order_by(ToolRun.created_at.desc())
-        .limit(limit)
-    )
+    stmt = select(ToolRun).where(ToolRun.user_id == user_id)
+    if tool is not None:
+        stmt = stmt.where(ToolRun.tool == tool)
+    if status is not None:
+        stmt = stmt.where(ToolRun.status == status)
+    result = await session.execute(stmt.order_by(ToolRun.created_at.desc()).limit(limit))
     return list(result.scalars().all())
 
 
