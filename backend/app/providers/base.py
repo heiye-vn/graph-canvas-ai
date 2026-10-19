@@ -42,5 +42,14 @@ class ImageProvider(Protocol):
         prompt: str,
         **kwargs,
     ) -> list[bytes]:
-        """图生图 / 局部重绘。M6 局部编辑时启用。"""
+        """图生图 / 局部重绘。
+
+        `mask`（可选，**不透明处 = 需要重绘**，尺寸与 image 一致）：
+        支持局部重绘的实现（如 OpenAI edits）直接用它锁住改动范围；
+        不支持的实现（如 qwen-image-edit 只有 prompt）可以忽略 ——
+        调用方 `apply_masked` 仍会按同一张遮罩把选区外的像素合回去，
+        所以「改不到选区外」这个承诺不依赖 provider 的能力。
+
+        **绝不返回原图兜底**：占位实现会让任务「成功」但产物错误。
+        """
         ...

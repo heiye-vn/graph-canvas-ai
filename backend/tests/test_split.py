@@ -10,11 +10,13 @@ import io
 import pytest
 from PIL import Image
 
+from app.edits.mask import overlay_png
 from app.edits.ocr import TextBox, detect_text
 from app.edits.split import (
     EmptyCut,
     cut_object,
     fill_background,
+    grow_mask,
     punch,
     remove_text,
 )
@@ -72,6 +74,27 @@ def test_cut_object_empty_mask_raises():
     mask = _png(Image.new("L", SIZE, 0))
     with pytest.raises(EmptyCut):
         cut_object(source, mask)
+
+
+def test_grow_mask_expands_alpha_only():
+    """外扩只动 alpha：物体边界外的 1px 亮边要一起吃掉，否则背景留一圈轮廓。"""
+    mask = Image.new("L", SIZE, 0)
+    mask.putpixel((32, 24), 255)
+
+    grown = grow_mask(overlay_png(mask), 3)
+    alpha = Image.open(io.BytesIO(grown)).getchannel("A")
+
+    assert alpha.getpixel((32, 24)) == 255
+    assert alpha.getpixel((32, 21)) == 255  # 上扩 3px 覆盖住
+    assert alpha.getpixel((32, 20)) == 0  # 第 4px 之外不动
+    assert alpha.getpixel((10, 10)) == 0
+
+
+def test_grow_mask_zero_radius_is_passthrough():
+    mask = Image.new("L", SIZE, 0)
+    mask.putpixel((32, 24), 255)
+    original = overlay_png(mask)
+    assert grow_mask(original, 0) == original
 
 
 def test_fill_background_blur_fallback_fills_hole():

@@ -106,9 +106,14 @@ class DashscopeProvider:
         prompt: str,
         *,
         mime: str = "image/png",
+        mask: bytes | None = None,
         **kwargs: Any,
     ) -> list[bytes]:
-        """图生图 / 编辑：参考图走 Base64 data URL（服务端不要求公网可访问）。"""
+        """图生图 / 编辑：参考图走 Base64 data URL（服务端不要求公网可访问）。
+
+        `mask` 这里用不上：qwen-image-edit 只吃「图 + 一句话」，
+        没有遮罩入参。局部性由调用方的 apply_masked 保证，不靠模型自觉。
+        """
         encoded = base64.b64encode(image).decode()
         # data URL 上限 10MB：超了报人话，而不是等服务端回一个含糊的 400
         if len(encoded) * 3 // 4 > 10 * 1024 * 1024:

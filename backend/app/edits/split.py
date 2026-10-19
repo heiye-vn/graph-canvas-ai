@@ -60,6 +60,22 @@ def alpha_mask(data: bytes) -> bytes:
     return overlay_png(alpha)
 
 
+def grow_mask(mask: bytes, radius: int) -> bytes:
+    """把遮罩向外扩 radius 像素（尺寸不变，只动 alpha）。
+
+    为什么非扩不可：rembg 的 alpha 边界压在物体的**抗锯齿边**上，
+    紧贴遮罩外还有约 1px 的亮边（实测：遮罩外 0~1px 原图亮度 191，
+    1~2px 就掉到 33，也就是干净的绸缎）。不清掉这 1px，
+    apply_masked 的羽化带会把它按比例混回来 ——
+    拆完层的背景上就留一圈清晰的物体轮廓（1px 灰线）。
+    外扩后过渡带整体落到「已经是背景」的外侧，轮廓自然消失。
+    """
+    if radius <= 0:
+        return mask
+    image = Image.open(io.BytesIO(mask)).convert("RGBA")
+    return _png(image.filter(ImageFilter.MaxFilter(radius * 2 + 1)))
+
+
 def fill_background(source: bytes, mask: bytes) -> bytes:
     """挖掉遮罩覆盖的像素，用周围颜色填上，保证背景不再含主体。"""
     image = Image.open(io.BytesIO(source)).convert("RGB")
@@ -120,9 +136,7 @@ def _blur_inpaint(image: Image.Image, luma: Image.Image) -> Image.Image:
     seed.paste(image, mask=keep)
     patched = seed
     for radius in (24, 12, 5):
-        patched = Image.composite(
-            patched.filter(ImageFilter.GaussianBlur(radius)), patched, luma
-        )
+        patched = Image.composite(patched.filter(ImageFilter.GaussianBlur(radius)), patched, luma)
     return Image.composite(patched, image, luma)
 
 

@@ -32,7 +32,7 @@ from app.providers.dashscope import (
     ProviderError,
 )
 from app.providers.mock import MockProvider
-from app.providers.openai import OpenAIImageProvider
+from app.providers.openai import OpenAIImageProvider, _to_openai_mask
 
 
 @pytest.fixture(autouse=True)
@@ -451,3 +451,77 @@ async def test_openai_text_to_image_translates_http_error():
 
     assert exc_info.value.code == "http_error"
     assert "Invalid API Key" in str(exc_info.value)
+
+
+# ------------------------------------------------------------------ OpenAI 图生图
+
+
+async def test_openai_edit_image_posts_multipart_to_edits_endpoint():
+    """图生图走 /images/edits 的 multipart —— 不是 JSON，也不是「原样返回」."""
+    calls: list[httpx.Request] = []
+    png = _png_bytes()
+    b64 = base64.b64encode(png).decode()
+    provider = _make_openai_provider(
+        calls,
+        {("POST", "/v1/images/edits"): httpx.Response(200, json={"data": [{"b64_json": b64}]})},
+    )
+
+    images = await provider.edit_image(b"\x89PNG\r\n\x1a\ninput", "移除红色圆形")
+
+    assert images == [png]
+    req = calls[0]
+    assert req.headers["content-type"].startswith("multipart/form-data; boundary=")
+    body = req.content
+    for field in (b'name="model"', b'name="prompt"', b'name="image"', b'name="response_format"'):
+        assert field in body
+    assert b'name="mask"' not in body  # 没传遮罩就不该出现这个字段
+
+
+async def test_openai_edit_image_fails_instead_of_echoing_input():
+    """拿不到图必须报错。
+
+    曾经的实现是 `return [image]`：拆层「成功」、背景却没被修补，
+    用户看到的是「主体在背景里重影」这种没人能定位的怪结果。
+    """
+    calls: list[httpx.Request] = []
+    provider = _make_openai_provider(
+        calls,
+        {("POST", "/v1/images/edits"): httpx.Response(200, json={"data": []})},
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        await provider.edit_image(b"\x89PNG\r\n\x1a\ninput", "移除红色圆形")
+
+    assert exc_info.value.code == "no_image_data"
+
+
+async def test_openai_edit_image_translates_unsupported_endpoint():
+    """中转站不认 /images/edits 时，要能看到 HTTP 状态与原因。"""
+    calls: list[httpx.Request] = []
+    provider = _make_openai_provider(
+        calls,
+        {
+            ("POST", "/v1/images/edits"): httpx.Response(
+                404, json={"error": {"message": "unknown endpoint"}}
+            )
+        },
+    )
+
+    with pytest.raises(ProviderError) as exc_info:
+        await provider.edit_image(b"\x89PNG\r\n\x1a\ninput", "改")
+
+    assert exc_info.value.code == "http_error"
+    assert "unknown endpoint" in str(exc_info.value)
+
+
+def test_to_openai_mask_inverts_alpha():
+    """本项目的遮罩「不透明=要改」，OpenAI 的遮罩「全透明=要改」——必须取反。"""
+    solid = Image.new("RGBA", (4, 4), (95, 152, 173, 255))
+    buffer = io.BytesIO()
+    solid.save(buffer, format="PNG")
+
+    converted = Image.open(io.BytesIO(_to_openai_mask(buffer.getvalue())))
+
+    assert converted.mode == "RGBA"
+    assert converted.getchannel("A").getextrema() == (0, 0)
+    assert converted.convert("RGB").getpixel((0, 0)) == (95, 152, 173)

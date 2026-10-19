@@ -106,7 +106,7 @@ async def select_strokes(
         asset = await asset_service.get_asset(
             session, record.user_id, uuid.UUID(current["mask_asset_id"])
         )
-        base = to_luma(await storage.get_object(asset.s3_key), size)
+        base = to_luma(storage.get_object(asset.s3_key), size)
     mask = rasterize_strokes(size, strokes, radius=radius, base=base)
     if base is not None:
         mask = union(base, mask)
@@ -144,7 +144,7 @@ async def mask_bytes(
         asset = await asset_service.get_asset(session, record.user_id, uuid.UUID(asset_id))
     except Exception as exc:  # 404/403 都归到「选区不可用」
         raise EmptySelection from exc
-    return await storage.get_object(asset.s3_key)
+    return storage.get_object(asset.s3_key)
 
 
 def _guard(record: EditSession, revision: int) -> None:

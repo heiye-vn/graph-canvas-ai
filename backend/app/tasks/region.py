@@ -74,7 +74,7 @@ async def inpaint_region(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=30, stage="局部生成中")
             await session.commit()
 
-            edited = await _edit_with_clamp(run, source, params.get("prompt") or "")
+            edited = await _edit_with_clamp(run, source, params.get("prompt") or "", mask=mask)
 
             await runs_service.report(run, progress=80, stage="合并选区")
             output = apply_masked(source, edited, mask)
@@ -102,9 +102,7 @@ async def inpaint_region(ctx, run_id: str) -> None:
             await selections.clear(record.id)
         except (MaskSizeMismatch, tool_exec.ToolError) as exc:
             logger.info("任务 %s 被判废：%s", run_id, exc)
-            await runs_service.fail(
-                run, code="stale_selection", message=str(exc), recoverable=True
-            )
+            await runs_service.fail(run, code="stale_selection", message=str(exc), recoverable=True)
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
             await runs_service.fail(run, code=exc.code, message=exc.message, recoverable=True)
@@ -118,12 +116,18 @@ async def inpaint_region(ctx, run_id: str) -> None:
             await events.publish(DoneEvent(run_id=run.id, status=run.status))
 
 
-async def edit_image_clamped(image: bytes, prompt: str) -> bytes:
+async def edit_image_clamped(image: bytes, prompt: str, *, mask: bytes | None = None) -> bytes:
     """Provider 编辑；边长 clamp 到 [512, 2048]（M6 关键设计 ⑤）。
 
     太小的图直接送模型，生成质量崩；太大的图又慢又贵。缩放发生在
     送模型之前，结果送回来先放大回原尺寸再合成 —— 选区遮罩始终
     作用在原始分辨率上，精度不因 clamp 损失。
+
+    mask（不透明处 = 要重绘）会跟着一起缩放后交给 Provider：
+    支持局部重绘的接口（OpenAI edits）据此锁住改动范围，只有它
+    才能保证「选区外的像素连动都不动」；不支持的实现忽略它，
+    局部性退化成靠 apply_masked 事后合回。
+
     供局部编辑（region）与拆层背景修补（split）共用。
     """
     img = Image.open(io.BytesIO(image))
@@ -135,17 +139,28 @@ async def edit_image_clamped(image: bytes, prompt: str) -> bytes:
     elif longest < _EDIT_MIN_EDGE:
         scale = _EDIT_MIN_EDGE / longest
 
+    payload_size = (int(width * scale), int(height * scale))
     payload = image
     if scale != 1.0:
-        resized = img.resize(
-            (int(width * scale), int(height * scale)), Image.Resampling.LANCZOS
-        )
+        resized = img.resize(payload_size, Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
         resized.save(buffer, format="PNG")
         payload = buffer.getvalue()
 
+    mask_payload: bytes | None = None
+    if mask is not None:
+        mask_image = Image.open(io.BytesIO(mask)).convert("RGBA")
+        # 尺寸纪律：遮罩与画布必须严格同尺寸，不符就是上游算错了，绝不拉伸糊过去
+        if mask_image.size != (width, height):
+            raise MaskSizeMismatch(f"遮罩尺寸 {mask_image.size} 与画布尺寸 {(width, height)} 不符")
+        if scale != 1.0:
+            mask_image = mask_image.resize(payload_size, Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        mask_image.save(buffer, format="PNG")
+        mask_payload = buffer.getvalue()
+
     provider = get_image_provider()
-    edited = (await provider.edit_image(payload, prompt))[0]
+    edited = (await provider.edit_image(payload, prompt, mask=mask_payload))[0]
 
     if scale != 1.0:
         back = Image.open(io.BytesIO(edited)).convert("RGBA")
@@ -157,11 +172,13 @@ async def edit_image_clamped(image: bytes, prompt: str) -> bytes:
     return edited
 
 
-async def _edit_with_clamp(run: ToolRun, source: bytes, prompt: str) -> bytes:
+async def _edit_with_clamp(
+    run: ToolRun, source: bytes, prompt: str, *, mask: bytes | None = None
+) -> bytes:
     """按工具语义包装 prompt（消除/替换各有固定句式），再走 clamp 编辑。"""
     tool = run.tool
     if tool == "erase_region":
         prompt = prompt or _ERASE_PROMPT
     else:  # replace_region 的 prompt 由参数层保证非空
         prompt = f"只改选中区域：{prompt}。选区外的主体、光线和背景必须保持原样。"
-    return await edit_image_clamped(source, prompt)
+    return await edit_image_clamped(source, prompt, mask=mask)

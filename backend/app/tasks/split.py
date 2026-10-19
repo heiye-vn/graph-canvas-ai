@@ -18,8 +18,8 @@ from PIL import Image
 
 from app.edits.mask import apply_masked
 from app.edits.ocr import detect_text
-from app.edits.split import alpha_mask, remove_text
-from app.models import ToolRun
+from app.edits.split import alpha_mask, grow_mask, remove_text
+from app.models import SessionAsset, ToolRun
 from app.providers.base import ProviderError
 from app.schemas.events import DoneEvent, ResultEvent
 from app.services import assets as asset_service
@@ -61,10 +61,14 @@ async def split_layers(ctx, run_id: str) -> None:
 
             await runs_service.report(run, progress=35, stage="分离主体")
             subject = await asyncio.to_thread(_remove_background, source)
-            mask = alpha_mask(subject)
+            # 外扩 3px：把物体抗锯齿边上的 1px 亮边一起纳入重绘范围，
+            # 否则背景上会留一圈物体轮廓（详见 edits/split.py::grow_mask）
+            mask = grow_mask(alpha_mask(subject), 3)
 
             await runs_service.report(run, progress=55, stage="修补背景")
-            edited = await edit_image_clamped(source, _RECONSTRUCT)
+            # 把主体遮罩一起交给模型：只有「只重绘主体那一块」，
+            # 补出来的背景才可能和原图无缝接上（不支持的 provider 会忽略它）
+            edited = await edit_image_clamped(source, _RECONSTRUCT, mask=mask)
             background = apply_masked(source, edited, mask)
 
             texts = []
@@ -83,6 +87,8 @@ async def split_layers(ctx, run_id: str) -> None:
             background_asset = await asset_service.create_from_bytes(
                 session, user_id=run.user_id, data=background, kind="image"
             )
+            session.add(SessionAsset(session_id=record.id, asset_id=background_asset.id))
+            session.add(SessionAsset(session_id=record.id, asset_id=subject_asset.id))
             for asset in (background_asset, subject_asset):
                 await events.publish(
                     ResultEvent(
