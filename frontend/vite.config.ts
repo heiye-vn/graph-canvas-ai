@@ -14,14 +14,38 @@ export default defineConfig({
     },
   },
   server: {
+    host: '127.0.0.1',
     port: 7301,
     strictPort: true,
     proxy: {
-      '/api': { target: API_TARGET, changeOrigin: true },
+      '/api': {
+        target: API_TARGET,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.error('[Vite Proxy API Error]', err.message)
+          })
+        },
+      },
       // 探针与 SSE 刻意不挂 /api 前缀（后端同规则），便于反向代理单独关闭缓冲
       '/health': { target: API_TARGET, changeOrigin: true },
       '/ready': { target: API_TARGET, changeOrigin: true },
-      '/events': { target: API_TARGET, changeOrigin: true },
+      '/events': {
+        target: API_TARGET,
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (err, _req, _res) => {
+            console.error('[Vite Proxy Events Error]', err.message)
+          })
+          proxy.on('proxyRes', (proxyRes) => {
+            if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
+              proxyRes.headers['connection'] = 'keep-alive'
+              proxyRes.headers['cache-control'] = 'no-cache, no-transform'
+              proxyRes.headers['x-accel-buffering'] = 'no'
+            }
+          })
+        },
+      },
     },
   },
   build: {

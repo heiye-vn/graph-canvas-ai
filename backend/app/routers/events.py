@@ -49,17 +49,19 @@ async def stream_agent_run(
     建流时先按 cot_after 回放 Redis 缓冲 —— 断线重连不丢 token，
     前端再按 seq 去重，双保险（DoD ③）。
     """
+    from app.models.agent_run import AWAITING_CONFIRM
     from app.services import agent_runs as agent_runs_service
 
     user: User = await user_from_token(token, session)
     turn = await agent_runs_service.get(session, user_id=user.id, run_id=run_id)
     status_at_open = turn.status
-    terminal_at_open = turn.is_terminal
+    # 规划阶段结束标志：终态（succeeded/failed/cancelled）或等待用户确认（awaiting_confirm）
+    planning_done_at_open = turn.is_terminal or status_at_open == AWAITING_CONFIRM
 
     from fastapi.responses import StreamingResponse
 
     return StreamingResponse(
-        _agent_event_stream(run_id, status_at_open, terminal_at_open, cot_after),
+        _agent_event_stream(run_id, status_at_open, planning_done_at_open, cot_after),
         media_type="text/event-stream",
         status_code=status.HTTP_200_OK,
         headers={
@@ -71,7 +73,7 @@ async def stream_agent_run(
 
 
 async def _agent_event_stream(
-    run_id: uuid.UUID, status_at_open: str, terminal_at_open: bool, cot_after: int
+    run_id: uuid.UUID, status_at_open: str, done_at_open: bool, cot_after: int
 ):
     started = time.monotonic()
 
@@ -82,7 +84,7 @@ async def _agent_event_stream(
         for item in await cot_service.replay(run_id, after_seq=cot_after):
             yield frame(CotEvent.model_validate(item))
 
-        if terminal_at_open:
+        if done_at_open:
             yield frame(DoneEvent(run_id=run_id, status=status_at_open))
             return
 

@@ -172,30 +172,41 @@ async def _drive(
         turn = await session.get(AgentRun, run_id)
         if turn is None or turn.status in TERMINAL:
             return
-        checkpointer = await get_checkpointer()
-        graph = build_graph().compile(checkpointer=checkpointer)
-        config = {"configurable": {"thread_id": str(run_id)}}
-
-        state_acc: dict[str, Any] = {}
-        if resume is not None:
-            stream = graph.astream(Command(resume=resume), config, stream_mode="updates")
-        else:
-            base = dict(input_state or {})
-            base.setdefault(
-                "run_id", str(run_id)
-            )
-            base.setdefault("user_id", str(turn.user_id))
-            base.setdefault("session_id", str(turn.session_id))
-            base.setdefault("instruction", turn.instruction)
-            base.setdefault("plan", list(turn.plan or []))
-            base.setdefault("errors", [])
-            base.setdefault("replans", 0)
-            base.setdefault("approved", False)
-            stream = graph.astream(base, config, stream_mode="updates")
-
-        interrupted_kind: str | None = None
         started = time.monotonic()
+        interrupted_kind: str | None = None
+        state_acc: dict[str, Any] = {}
         try:
+            checkpointer = await get_checkpointer()
+            graph = build_graph().compile(checkpointer=checkpointer)
+            config = {"configurable": {"thread_id": str(run_id)}}
+
+            checkpoint_tuple = None
+            if hasattr(checkpointer, "aget_tuple"):
+                checkpoint_tuple = await checkpointer.aget_tuple(config)
+            elif hasattr(checkpointer, "get_tuple"):
+                checkpoint_tuple = checkpointer.get_tuple(config)
+
+            if resume is not None and checkpoint_tuple is not None:
+                stream = graph.astream(Command(resume=resume), config, stream_mode="updates")
+            else:
+                base = dict(input_state or {})
+                base.setdefault("run_id", str(run_id))
+                base.setdefault("user_id", str(turn.user_id))
+                base.setdefault("session_id", str(turn.session_id))
+                base.setdefault("instruction", turn.instruction)
+                base.setdefault("plan", list(turn.plan or []))
+                base.setdefault("errors", [])
+                base.setdefault("replans", 0)
+                is_approved = (resume.get("action") == CONFIRM) if resume else False
+                # 计划已经在跑/跑过（页面刷新后点确认）→ 视为已批准，别卡在确认门
+                if any(
+                    step.get("status") in ("running", "queued", "succeeded")
+                    for step in (turn.plan or [])
+                ):
+                    is_approved = True
+                base.setdefault("approved", is_approved)
+                stream = graph.astream(base, config, stream_mode="updates")
+
             # ⚠️ stream_mode="updates" 的增量是 {节点名: {channel: 值}}，
             # 不是扁平的 channel 字典 —— 拍平前先剥节点名。
             async for update in stream:

@@ -63,8 +63,11 @@ async def plan_node(state: GraphState) -> dict[str, Any]:
     """流式规划 + 六道关卡。已有计划（retry 续跑）时直接跳过。"""
     if state.get("plan"):
         return {}
+    run_id_val = state.get("run_id")
+    if not run_id_val:
+        return {}
     started = time.monotonic()
-    emit = _emitter(state["run_id"])
+    emit = _emitter(run_id_val)
     edit_session = await _session_of(state)
     doc = history_service.LayerDocument.model_validate(edit_session.doc)
     result = await llm_module.plan_tool_calls_stream(

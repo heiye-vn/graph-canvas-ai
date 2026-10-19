@@ -28,19 +28,32 @@ def _psycopg_url() -> str:
 
 
 async def get_checkpointer():
-    """懒加载全局 checkpointer；首次调用会执行 setup() 建检查点表（幂等 DDL）。"""
+    """懒加载全局 checkpointer；首次调用会执行 setup() 建检查点表（幂等 DDL）。
+
+    在 Windows（ProactorEventLoop）或 psycopg 异常时平滑降级为 MemorySaver，
+    确保本地单机开发或环境不匹配时依然能够顺畅执行 Agent 对话与人机确认。
+    """
     global _saver, _conn
     if _saver is not None:
         return _saver
-    _conn = await AsyncConnection.connect(
-        _psycopg_url(), autocommit=True, row_factory=dict_row
-    )
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    try:
+        _conn = await AsyncConnection.connect(
+            _psycopg_url(), autocommit=True, row_factory=dict_row
+        )
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-    _saver = AsyncPostgresSaver(_conn)
-    await _saver.setup()
-    logger.info("LangGraph checkpointer 就绪（postgres）")
-    return _saver
+        _saver = AsyncPostgresSaver(_conn)
+        await _saver.setup()
+        logger.info("LangGraph checkpointer 就绪（postgres）")
+        return _saver
+    except Exception as exc:
+        logger.warning(
+            "LangGraph postgres checkpointer 初始化失败（%s），降级使用 MemorySaver", exc
+        )
+        from langgraph.checkpoint.memory import MemorySaver
+
+        _saver = MemorySaver()
+        return _saver
 
 
 async def close_checkpointer() -> None:

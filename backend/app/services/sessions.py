@@ -81,8 +81,17 @@ async def to_out(session: AsyncSession, edit_session: EditSession) -> SessionOut
     from app.schemas.layer_doc import LayerDocument
 
     doc = LayerDocument.model_validate(edit_session.doc)
-    asset_ids = await session_assets(session, edit_session.id)
-    found = await asset_service.list_assets_by_ids(session, edit_session.user_id, asset_ids)
+    # 取出会话关联素材 + 图层文档内实际引用的所有素材（去重并保序）
+    existing_ids = await session_assets(session, edit_session.id)
+    seen_ids = set(existing_ids)
+    all_asset_ids = list(existing_ids)
+
+    for layer in doc.layers:
+        if layer.source and layer.source.asset_id and layer.source.asset_id not in seen_ids:
+            all_asset_ids.append(layer.source.asset_id)
+            seen_ids.add(layer.source.asset_id)
+
+    found = await asset_service.list_assets_by_ids(session, edit_session.user_id, all_asset_ids)
 
     return SessionOut(
         id=edit_session.id,

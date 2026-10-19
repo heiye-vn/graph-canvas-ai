@@ -146,8 +146,12 @@ export function subscribeAgent(
 
 function subscribeUrl(url: string, options: SubscribeOptions): () => void {
   const source = new EventSource(url)
+  let retryCount = 0
+  let lastErrorTime = 0
 
   source.onmessage = (message) => {
+    // 成功收到消息，重置错误计数
+    retryCount = 0
     let event: StreamEvent
     try {
       event = JSON.parse(message.data) as StreamEvent
@@ -163,6 +167,21 @@ function subscribeUrl(url: string, options: SubscribeOptions): () => void {
   }
 
   source.onerror = () => {
+    const now = Date.now()
+    if (now - lastErrorTime < 2000) {
+      retryCount++
+    } else {
+      retryCount = 1
+    }
+    lastErrorTime = now
+
+    // 若短时间内连续重试超过 5 次，熔断避免请求风暴
+    if (retryCount >= 5) {
+      source.close()
+      options.onClosed?.('事件流连接不稳定，已停止自动重试')
+      return
+    }
+
     // CLOSED 说明服务端拒绝（401/404）或未再重连；CONNECTING 是正常断线重试
     if (source.readyState === EventSource.CLOSED) {
       source.close()
