@@ -426,7 +426,7 @@ export default function EditorPage() {
             </Tooltip>
           )}
 
-          <div className="h-3.5 w-px bg-slate-200 mx-0.5" />
+          <div className="h-4 w-px bg-slate-200 mx-0.5" />
 
           {/* 对比按钮 */}
           <Tooltip
@@ -440,10 +440,10 @@ export default function EditorPage() {
               type="button"
               disabled={!canCompare}
               onClick={() => setCompare((prev) => !prev)}
-              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded transition-all cursor-pointer ${
+              className={`flex h-7 items-center gap-1.5 px-2.5 text-xs font-medium rounded-md transition-all cursor-pointer ${
                 compare
                   ? "bg-blue-600 text-white shadow-2xs"
-                  : "text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                  : "bg-white text-slate-600 border border-slate-200 hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40"
               }`}
             >
               <SwapOutlined className="text-[11px]" />
@@ -451,40 +451,44 @@ export default function EditorPage() {
             </button>
           </Tooltip>
 
-          {/* 缩放控制器群 */}
-          <div className="flex items-center rounded border border-slate-200 bg-slate-50 px-0.5">
-            <button
-              type="button"
-              onClick={() => stepZoom(-1)}
-              className="p-1 text-slate-500 hover:text-slate-800 cursor-pointer"
-              aria-label="缩小"
-            >
-              <MinusOutlined className="text-[10px]" />
-            </button>
-            <span className="w-10 text-center font-mono text-[11px] tabular-nums text-slate-600">
+          {/* 缩放控制器群（一体化高质感控件，统一定高 h-7 像素级对齐） */}
+          <div className="flex h-7 items-center rounded-md border border-slate-200 bg-slate-50/80 px-1 shadow-2xs">
+            <Tooltip title="缩小 (10%)">
+              <button
+                type="button"
+                onClick={() => stepZoom(-1)}
+                className="flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-white hover:text-slate-800 transition-colors cursor-pointer"
+                aria-label="缩小"
+              >
+                <MinusOutlined className="text-[10px]" />
+              </button>
+            </Tooltip>
+            <span className="w-11 text-center font-mono text-[11px] font-medium tabular-nums text-slate-600 select-none">
               {zoom === null ? "适应" : `${Math.round(zoom * 100)}%`}
             </span>
-            <button
-              type="button"
-              onClick={() => stepZoom(1)}
-              className="p-1 text-slate-500 hover:text-slate-800 cursor-pointer"
-              aria-label="放大"
-            >
-              <PlusOutlined className="text-[10px]" />
-            </button>
+            <Tooltip title="放大 (10%)">
+              <button
+                type="button"
+                onClick={() => stepZoom(1)}
+                className="flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-white hover:text-slate-800 transition-colors cursor-pointer"
+                aria-label="放大"
+              >
+                <PlusOutlined className="text-[10px]" />
+              </button>
+            </Tooltip>
+            <div className="h-3 w-px bg-slate-200 mx-0.5" />
+            <Tooltip title="适应窗口">
+              <button
+                type="button"
+                disabled={zoom === null}
+                onClick={() => setZoom(null)}
+                className="flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-white hover:text-slate-800 disabled:opacity-30 disabled:hover:bg-transparent transition-colors cursor-pointer"
+                aria-label="适应窗口"
+              >
+                <ColumnWidthOutlined className="text-[11px]" />
+              </button>
+            </Tooltip>
           </div>
-
-          <Tooltip title="适应窗口">
-            <button
-              type="button"
-              disabled={zoom === null}
-              onClick={() => setZoom(null)}
-              className="p-1.5 text-slate-500 hover:text-slate-800 disabled:opacity-30 rounded hover:bg-slate-100 cursor-pointer"
-              aria-label="适应窗口"
-            >
-              <ColumnWidthOutlined className="text-xs" />
-            </button>
-          </Tooltip>
 
           {/* 导出按钮 */}
           <Button
@@ -492,7 +496,7 @@ export default function EditorPage() {
             type="primary"
             icon={<ExportOutlined className="text-xs" />}
             onClick={exportPng}
-            className="h-7! px-2.5! text-xs! font-medium rounded shadow-2xs"
+            className="h-7! px-3! text-xs! font-medium rounded-md shadow-2xs"
           >
             导出
           </Button>
