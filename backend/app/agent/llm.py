@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -17,6 +18,18 @@ from langchain_openai import ChatOpenAI
 # prompt 正文与版本号住在 prompts.py（M9.3 起版本化，改文案必须升 PROMPT_VERSION）
 from app.agent.prompts import SYSTEM_PROMPT
 from app.config import get_settings
+
+# ---- CoT 攒批（M9.1 补丁）------------------------------------------------
+# astream 是逐 token 的：一个 chunk 就 emit 一次，会让「思考过程（N 条）」
+# 退化成 token 计数（实测一句 30 字的话散成 13 行、每行 3 个字）。
+# 这里按三种时机攒够再发 —— 协议不变（仍是 delta 增量），只是帧数从几百降到十几：
+#   · 攒够 COT_FLUSH_CHARS 个字
+#   · 这段 delta 以句末标点/换行收尾（读起来正好断句）
+#   · 距上次发送已超过 COT_FLUSH_SECONDS（只兜底慢速流：阈值要明显大于
+#     正常 chunk 间隔，否则「一 chunk 一帧」会从时间这条口子漏回来）
+COT_FLUSH_CHARS = 16
+COT_FLUSH_SECONDS = 0.25
+COT_FLUSH_BREAKS = "。！？；…\n"
 
 
 class PlannerError(RuntimeError):
@@ -118,6 +131,32 @@ async def _plan_stream(
         if emit is not None and delta:
             await emit(kind, delta)
 
+    # thought 的攒批缓冲（只影响 thought；tool_call 仍即时发，顺序不能乱）
+    buf: list[str] = []
+    buf_chars = 0
+    last_flush = time.monotonic()
+
+    async def _flush_thought() -> None:
+        nonlocal buf_chars, last_flush
+        if not buf:
+            return
+        text = "".join(buf)
+        buf.clear()
+        buf_chars = 0
+        last_flush = time.monotonic()
+        await _push("thought", text)
+
+    async def _push_thought(delta: str) -> None:
+        nonlocal buf_chars
+        buf.append(delta)
+        buf_chars += len(delta)
+        if (
+            buf_chars >= COT_FLUSH_CHARS
+            or (delta and delta[-1] in COT_FLUSH_BREAKS)
+            or time.monotonic() - last_flush >= COT_FLUSH_SECONDS
+        ):
+            await _flush_thought()
+
     # 两条硬规矩（施工图钉死的坑）：
     #   1. 推理模型的 reasoning_content 与 content 是两个字段，都要透传
     #   2. chunk 是增量（delta），只追加、绝不整段覆盖
@@ -126,13 +165,20 @@ async def _plan_stream(
         async for chunk in llm.astream(messages):
             reasoning = (chunk.additional_kwargs or {}).get("reasoning_content")
             if reasoning:
-                await _push("thought", reasoning)
+                await _push_thought(reasoning)
             content = chunk.content if isinstance(chunk.content, str) else ""
             if content:
-                await _push("thought", content)
+                await _push_thought(content)
             merged = chunk if merged is None else merged + chunk
     except Exception as exc:
+        # 已经想到一半的别丢：先冲掉缓冲，用户才看得到它卡在哪一步。
+        # 收尾发送失败不该盖住真正的失败原因，所以这里吞掉自身异常。
+        try:
+            await _flush_thought()
+        except Exception:  # noqa: BLE001
+            pass
         raise PlannerError(_describe_llm_error(exc, model=model, base_url=base_url)) from exc
+    await _flush_thought()
 
     calls = []
     for call in getattr(merged, "tool_calls", []) or []:
@@ -142,8 +188,10 @@ async def _plan_stream(
         args = call.get("args") or {}
         calls.append({"name": name, "args": dict(args)})
 
+    # 只发工具名：前端标签已经是「决定调用」，再拼「调用 xxx」会读成
+    # 「[决定调用] 调用 split_layers」，重复一遍动词
     for call in calls:
-        await _push("tool_call", f"调用 {call['name']}")
+        await _push("tool_call", str(call["name"]))
 
     usage = getattr(merged, "usage_metadata", None) or {}
     meta = {

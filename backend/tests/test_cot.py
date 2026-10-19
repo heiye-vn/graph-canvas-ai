@@ -94,9 +94,83 @@ async def test_stream_planner_pushes_thought_and_tool_call(monkeypatch):
 
     kinds = [kind for kind, _delta in pushed]
     assert "thought" in kinds and "tool_call" in kinds
-    assert ("thought", "先调亮") in pushed  # reasoning_content 没被丢
-    assert ("thought", "好的，") in pushed  # content 也没被丢
-    assert pushed[-1][0] == "tool_call"  # 决定调用最后发
+    # 攒批后「一帧 = 一个 chunk」不再成立：两个字段的增量被拼成同一段思考，
+    # 这里要验的是「都没丢、顺序没乱」，不是帧数
+    thoughts = "".join(delta for kind, delta in pushed if kind == "thought")
+    assert thoughts == "先调亮好的，"
+    assert pushed[-1] == ("tool_call", "adjust_color")  # 决定调用最后发，且不重复动词
+
+
+@pytest.mark.asyncio
+async def test_stream_thought_is_coalesced(monkeypatch):
+    """逐 token 的 chunk 必须攒批：十几行碎片拼成一段，别一帧一行。"""
+
+    pieces = [
+        "我",
+        "先把画面拆",
+        "成背景层",
+        "和主体",
+        "（耳机）",
+        "层，",
+        "这样才能",
+        "单独",
+        "去掉",
+        "背景。",
+    ]
+
+    async def chunks(_messages):
+        for piece in pieces:
+            yield AIMessageChunk(content=piece)
+
+    class _Fake:
+        def bind_tools(self, _functions, **_kwargs):
+            return self
+
+        def astream(self, _messages):
+            return chunks(_messages)
+
+    monkeypatch.setattr(llm_module, "get_chat_model", lambda: _Fake())
+
+    pushed: list[tuple[str, str]] = []
+
+    async def emit(kind: str, delta: str) -> None:
+        pushed.append((kind, delta))
+
+    await llm_module.plan_tool_calls_stream("去背景", "摘要", [], emit)
+
+    assert pushed, "不该一条都不发"
+    # 文字一个不能少、顺序不能乱
+    assert "".join(delta for kind, delta in pushed if kind == "thought") == "".join(pieces)
+    # 帧数必须显著少于 chunk 数（否则等于没攒批）
+    assert len(pushed) < len(pieces)
+
+
+@pytest.mark.asyncio
+async def test_stream_error_flushes_partial_thought(monkeypatch):
+    """模型说到一半断流：已收到的思考要冲出去，用户才知道卡在哪。"""
+
+    async def chunks(_messages):
+        yield AIMessageChunk(content="想到一半")
+        raise RuntimeError("connection refused")
+
+    class _Fake:
+        def bind_tools(self, _functions, **_kwargs):
+            return self
+
+        def astream(self, _messages):
+            return chunks(_messages)
+
+    monkeypatch.setattr(llm_module, "get_chat_model", lambda: _Fake())
+
+    pushed: list[tuple[str, str]] = []
+
+    async def emit(kind: str, delta: str) -> None:
+        pushed.append((kind, delta))
+
+    with pytest.raises(llm_module.PlannerError):
+        await llm_module.plan_tool_calls_stream("x", "y", [], emit)
+
+    assert pushed == [("thought", "想到一半")]
 
 
 def test_stream_wrapper_keeps_planner_error(monkeypatch):
