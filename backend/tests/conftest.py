@@ -24,10 +24,10 @@ _TEST_ENV = {
     "APP_ENV": "test",
     "DATABASE_URL": os.getenv(
         "TEST_DATABASE_URL",
-        "postgresql+asyncpg://retouch:retouch_dev@127.0.0.1:7311/retouch_test",
+        "postgresql+asyncpg://retouch:retouch_dev@127.0.0.1:7411/retouch_test",
     ),
-    "REDIS_URL": os.getenv("TEST_REDIS_URL", "redis://127.0.0.1:7312/1"),
-    "S3_ENDPOINT": os.getenv("TEST_S3_ENDPOINT", "http://127.0.0.1:7313"),
+    "REDIS_URL": os.getenv("TEST_REDIS_URL", "redis://127.0.0.1:7412/1"),
+    "S3_ENDPOINT": os.getenv("TEST_S3_ENDPOINT", "http://127.0.0.1:7413"),
     "S3_ACCESS_KEY": "retouch",
     "S3_SECRET_KEY": "retouch_dev",
     "S3_BUCKET": "retouch-test",

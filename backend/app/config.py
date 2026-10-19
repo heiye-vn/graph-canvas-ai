@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # ---- 应用 ----
     app_env: Literal["development", "production", "test"] = "development"
-    api_port: int = 7302
+    api_port: int = 7402
     api_prefix: str = "/api"
 
     # ---- 基础设施（必填）----
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     redis_url: str = Field(description="redis://...")
 
     # ---- 对象存储（必填）----
-    s3_endpoint: str = Field(description="容器内 http://minio:9000，宿主机 http://127.0.0.1:7313")
+    s3_endpoint: str = Field(description="容器内 http://minio:9000，宿主机 http://127.0.0.1:7413")
     s3_access_key: str
     s3_secret_key: str
     s3_bucket: str = "retouch"

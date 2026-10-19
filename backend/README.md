@@ -39,7 +39,7 @@ uv sync --extra dev        # + 测试与 lint
 ## 常用命令
 
 ```bash
-uv run uvicorn app.main:app --port 7302 --reload     # API
+uv run uvicorn app.main:app --port 7402 --reload     # API
 uv run arq app.worker.WorkerSettings                 # 异步任务 worker（M2 起，必须与 API 同时跑）
 alembic revision --autogenerate -m "..."      # 生成迁移
 alembic upgrade head                          # 应用迁移

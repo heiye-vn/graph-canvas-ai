@@ -56,7 +56,7 @@ src/
 
 ```bash
 npm install --ignore-scripts   # ⚠️ 见下方「安装踩坑」
-npm run dev      # http://localhost:7301（已配代理到后端 7302）
+npm run dev      # http://127.0.0.1:7401（已配代理到后端 7402）
 npm run build    # 产物 dist/，由后端同源托管
 npm run lint
 npm run test     # vitest：只跑 src/**/*.test.ts（领域层纯函数）

@@ -101,13 +101,13 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # 仅开发环境放开：前端 dev server 在 7301
+    # 仅开发环境放开：前端 dev server 在 7401（本项目端口段 74xx，与参考项目 73xx 错开）
     if not settings.is_production:
         from fastapi.middleware.cors import CORSMiddleware
 
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=["http://localhost:7301", "http://127.0.0.1:7301"],
+            allow_origins=["http://localhost:7401", "http://127.0.0.1:7401"],
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],

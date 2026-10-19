@@ -4,7 +4,8 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // 后端 API 与 SSE 的代理目标（本地开发用；生产由后端同源托管 dist）
-const API_TARGET = 'http://127.0.0.1:7302'
+// 端口段 74xx：与参考项目 ai-picture-editor 的 73xx 错开，两套可同时启动
+const API_TARGET = 'http://127.0.0.1:7402'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -15,7 +16,7 @@ export default defineConfig({
   },
   server: {
     host: '127.0.0.1',
-    port: 7301,
+    port: 7401,
     strictPort: true,
     proxy: {
       '/api': {

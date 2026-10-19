@@ -21,4 +21,4 @@ COPY backend/ ./
 COPY --from=frontend /build/dist /app/frontend/dist
 
 ENV PATH="/app/backend/.venv/bin:$PATH"
-EXPOSE 7302
+EXPOSE 7402
