@@ -13,12 +13,12 @@
 import { useEffect } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Empty, Result, Space, Spin } from 'antd'
+import { Alert, Button, Result, Spin } from 'antd'
 
 import { getRun, listRunAssets } from '@/api/runs'
 import type { RunOut } from '@/api/runs'
 import AssetCard from '@/components/AssetCard'
-import PageHeader from '@/components/PageHeader'
+
 import { RunProgress } from '@/components/RunProgress'
 import { useCreateSessionAndEdit } from '@/hooks/useCreateSession'
 import { useRunStream } from '@/hooks/useRunStream'
@@ -89,42 +89,51 @@ export default function CandidatesPage() {
   const total = finished.length + live.length
 
   return (
-    <div className="mx-auto max-w-4xl px-8 py-10">
-      <PageHeader
-        title="候选图"
-        description={prompt || undefined}
-        extra={
-          isTerminalStatus(data.status) ? (
-            <Space>
-              <Button
-                type="primary"
-                loading={openEditor.isPending}
-                disabled={total === 0}
-                onClick={() =>
-                  openEditor.mutate({
-                    asset_ids: [
-                      ...finished.map((asset) => asset.id),
-                      ...live.map((candidate) => candidate.assetId),
-                    ],
-                    title: prompt ? `${prompt.slice(0, 20)}…` : undefined,
-                  })
-                }
-              >
-                在画布中编辑
-              </Button>
-              <Link to="/create">
-                <Button>再生成一组</Button>
-              </Link>
-              <Link to="/assets">
-                <Button type="link">去素材库</Button>
-              </Link>
-            </Space>
-          ) : null
-        }
-      />
+    <div className="mx-auto max-w-4xl px-6 py-8 select-none">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold text-slate-900 m-0">生成结果候选</h1>
+            <span className="rounded-full bg-blue-50 text-blue-600 px-2 py-0.5 text-xs font-semibold font-mono">
+              {total} 张产出
+            </span>
+          </div>
+          {prompt && (
+            <p className="text-xs text-slate-500 m-0 mt-1 max-w-xl truncate">
+              提示词：<span className="text-slate-800 font-medium">"{prompt}"</span>
+            </p>
+          )}
+        </div>
 
+        {isTerminalStatus(data.status) && (
+          <div className="flex items-center gap-2">
+            <Button
+              type="primary"
+              loading={openEditor.isPending}
+              disabled={total === 0}
+              onClick={() =>
+                openEditor.mutate({
+                  asset_ids: [
+                    ...finished.map((asset) => asset.id),
+                    ...live.map((candidate) => candidate.assetId),
+                  ],
+                  title: prompt ? `${prompt.slice(0, 20)}…` : undefined,
+                })
+              }
+              className="h-8! px-4! text-xs! font-semibold rounded-lg shadow-sm"
+            >
+              在画布中编辑
+            </Button>
+            <Link to="/create">
+              <Button className="h-8! text-xs! rounded-lg">再生成一组</Button>
+            </Link>
+          </div>
+        )}
+      </div>
+
+      {/* 实时生成进度卡片 */}
       {(!isTerminalStatus(data.status) || stream.status) && (
-        <section className="border-line bg-paper shadow-card rounded-card border p-5">
+        <section className="mt-6 rounded-xl border border-blue-200 bg-blue-50/30 p-5 shadow-2xs">
           <RunProgress
             status={stream.status ?? data.status}
             progress={stream.status ? stream.progress : data.progress}
@@ -134,23 +143,31 @@ export default function CandidatesPage() {
       )}
 
       {stream.error && (
-        <Alert className="mt-4" type="error" showIcon message={stream.error} closable />
+        <Alert className="mt-4 rounded-lg" type="error" showIcon message={stream.error} closable />
       )}
       {data.error?.message && (
-        <Alert className="mt-4" type="error" showIcon message={data.error.message} />
+        <Alert className="mt-4 rounded-lg" type="error" showIcon message={data.error.message} />
       )}
 
+      {/* 候选卡片网格 */}
       <section className="mt-8">
         {total === 0 ? (
-          <Empty
-            description={
-              isTerminalStatus(data.status) ? '这次没有产出可用的图。' : '正在生成，稍等片刻…'
-            }
-          />
+          <div className="rounded-xl border border-dashed border-slate-200 bg-white p-12 text-center text-xs text-slate-400">
+            {isTerminalStatus(data.status) ? '本次任务未产出图像。' : '正在实时生成中，请稍候…'}
+          </div>
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             {finished.map((asset) => (
-              <AssetCard key={asset.id} asset={asset} />
+              <AssetCard
+                key={asset.id}
+                asset={asset}
+                onEdit={() =>
+                  openEditor.mutate({
+                    asset_ids: [asset.id],
+                    title: prompt ? `${prompt.slice(0, 20)}…` : undefined,
+                  })
+                }
+              />
             ))}
 
             {live.map((candidate) => (
@@ -171,3 +188,4 @@ export default function CandidatesPage() {
     </div>
   )
 }
+

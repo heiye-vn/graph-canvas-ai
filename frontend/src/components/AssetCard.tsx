@@ -1,17 +1,10 @@
 /**
  * 素材卡 —— 创作页历史素材 / 素材库 / 候选页共用一份。
  *
- * 之前三个页面各写了一版 figure：圆角、图高、说明文字三处各调一遍，
- * 改一处必然漏两处。收进来之后页面间的差异只剩右下角那一颗按钮。
- *
- * `AssetOut` 天然满足 `AssetCardAsset`；候选页里「SSE 刚推过来、REST 还没刷到」
- * 的增量候选构造一个最小对象即可，不必先落库。
- *
- * `onDelete` 不传就不给删除入口 —— 候选页可以被分享出去，
- * 让点开链接的人顺手删掉原作者的素材是不合适的。
+ * 现代化视觉重构：悬停浮层操作、深邃装裱边框、精致尺寸标签。
  */
 
-import { Button, Card, Popconfirm, Tag, Tooltip } from 'antd'
+import { Popconfirm, Tag, Tooltip } from 'antd'
 import { DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons'
 
 export interface AssetCardAsset {
@@ -29,72 +22,84 @@ export default function AssetCard({
 }: {
   asset: AssetCardAsset
   onDelete?: () => void
-  /** 传了才出现「编辑」入口：用它这素材开一个编辑会话 */
   onEdit?: () => void
-  /** 推流刚到还没进库的候选：只打「刚刚生成」，不给多余操作 */
   pending?: boolean
 }) {
   const dimension =
-    asset.width && asset.height ? `${asset.width}×${asset.height}` : '尺寸未知'
+    asset.width && asset.height ? `${asset.width} × ${asset.height}` : '未知尺寸'
 
   return (
-    <Card
-      size="small"
-      hoverable
-      variant="outlined"
-      classNames={{ body: 'px-3! py-2.5!' }}
-      cover={<img src={asset.url} alt="" className="h-36 w-full object-cover" loading="lazy" />}
-      actions={onEdit ? [<EditButton key="edit" onEdit={onEdit} />] : undefined}
-    >
-      <div className="flex items-center justify-between gap-2">
-        {pending ? (
-          <Tag bordered={false} color="processing" className="m-0">
-            刚刚生成
-          </Tag>
-        ) : (
-          <span className="text-muted font-mono text-xs">{dimension}</span>
+    <div className="group relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xs transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md hover:border-slate-300">
+      {/* 图像展示区 */}
+      <div className="relative h-40 w-full overflow-hidden bg-slate-900/90">
+        <img
+          src={asset.url}
+          alt=""
+          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+          loading="lazy"
+        />
+
+        {/* 悬停浮层快捷操作 */}
+        <div className="absolute inset-0 bg-black/40 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 group-hover:opacity-100 flex items-center justify-center gap-2">
+          {onEdit && (
+            <Tooltip title="进入工作台精修">
+              <button
+                type="button"
+                onClick={onEdit}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-medium shadow-md hover:bg-blue-700 cursor-pointer transition-all"
+              >
+                <EditOutlined />
+                <span>编辑</span>
+              </button>
+            </Tooltip>
+          )}
+          <Tooltip title="在新标签页看大图">
+            <a
+              href={asset.url}
+              target="_blank"
+              rel="noreferrer"
+              className="p-1.5 rounded-md bg-white/90 text-slate-700 hover:text-black hover:bg-white text-xs shadow-md transition-all"
+            >
+              <ExportOutlined />
+            </a>
+          </Tooltip>
+        </div>
+
+        {pending && (
+          <div className="absolute top-2 left-2">
+            <Tag bordered={false} color="processing" className="m-0 text-[10px]">
+              刚刚生成
+            </Tag>
+          </div>
         )}
+      </div>
 
-        <div className="flex shrink-0 items-center gap-0.5">
-          <Button
-            type="link"
-            size="small"
-            href={asset.url}
-            target="_blank"
-            rel="noreferrer"
-            icon={<ExportOutlined />}
-          >
-            查看原图
-          </Button>
+      {/* 底部信息栏 */}
+      <div className="flex items-center justify-between px-3 py-2 bg-white">
+        <span className="font-mono text-[11px] text-slate-500 tabular-nums">{dimension}</span>
 
+        <div className="flex items-center gap-1">
           {onDelete && (
             <Popconfirm
               title="删除这张素材？"
-              description="删除后不可恢复。"
+              description="删除后将无法恢复。"
               okText="删除"
               cancelText="取消"
               okButtonProps={{ danger: true }}
               onConfirm={onDelete}
             >
-              <Button
-                type="text"
-                size="small"
-                danger
-                icon={<DeleteOutlined />}
+              <button
+                type="button"
+                className="p-1 text-slate-400 hover:text-red-500 rounded hover:bg-red-50 transition-colors cursor-pointer"
                 aria-label="删除素材"
-              />
+              >
+                <DeleteOutlined className="text-xs" />
+              </button>
             </Popconfirm>
           )}
         </div>
       </div>
-    </Card>
+    </div>
   )
 }
 
-function EditButton({ onEdit }: { onEdit: () => void }) {
-  return (
-    <Tooltip title="用它新建一个编辑会话">
-      <Button type="text" icon={<EditOutlined />} onClick={onEdit} aria-label="编辑这张素材" />
-    </Tooltip>
-  )
-}

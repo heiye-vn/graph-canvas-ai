@@ -16,13 +16,13 @@
 
 import { useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
-import { Alert, Button, ConfigProvider, Form, Input } from 'antd'
+import { Alert, Button, Form, Input } from 'antd'
 import { ArrowLeftOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
 
 import BrandMark from '@/components/BrandMark'
 import { APP_TAGLINE } from '@/lib/brand'
-import { darkPrimaryTheme } from '@/lib/antdTheme'
 import { useAuthStore } from '@/stores/authStore'
+
 
 interface LoginLocationState {
   /** 从落地页输入完 prompt 被拦到登录页时，记下要去哪、带什么 */
@@ -84,64 +84,74 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="bg-canvas flex min-h-full flex-col px-6 py-10">
-      <div className="mx-auto w-full max-w-md">
-        <Link to="/">
-          <Button type="text" size="small" icon={<ArrowLeftOutlined />}>
-            返回首页
-          </Button>
-        </Link>
+    <div className="bg-slate-50 flex min-h-full flex-col justify-center px-6 py-12 select-none">
+      <div className="mx-auto w-full max-w-sm">
+        <div className="mb-4">
+          <Link to="/">
+            <Button type="text" size="small" icon={<ArrowLeftOutlined />} className="text-slate-500 hover:text-slate-800">
+              返回首页
+            </Button>
+          </Link>
+        </div>
 
-        <div className="bg-paper border-line rounded-panel mt-6 border p-8 shadow-lift sm:p-10">
-          <BrandMark />
+        <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-md">
+          <div className="flex justify-center mb-2">
+            <BrandMark />
+          </div>
 
-          <h1 className="text-ink mt-8 text-3xl font-semibold tracking-tight">
-            {mode === 'login' ? '登录' : '创建账号'}
+          <h1 className="text-center text-xl font-bold tracking-tight text-slate-900 mt-4">
+            {mode === 'login' ? '登录工作台' : '开启创作之旅'}
           </h1>
+          <p className="text-center text-xs text-slate-500 mt-1 mb-6">
+            多图层 AI 图像生成与微调平台
+          </p>
 
           <Form
             form={form}
-            className="mt-8"
-            size="large"
+            size="middle"
             layout="vertical"
             requiredMark={false}
             onFinish={onSubmit}
           >
             <Form.Item
               name="email"
-              label="邮箱"
+              label={<span className="text-xs font-medium text-slate-700">工作邮箱</span>}
               rules={[
                 { required: true, message: '请输入邮箱' },
                 { type: 'email', message: '邮箱格式不正确' },
               ]}
+              className="mb-3.5!"
             >
               <Input
-                prefix={<MailOutlined className="text-faint" />}
+                prefix={<MailOutlined className="text-slate-400 text-xs" />}
                 placeholder="you@example.com"
                 autoComplete="email"
+                className="rounded-md!"
               />
             </Form.Item>
 
             <Form.Item
               name="password"
-              label="密码"
+              label={<span className="text-xs font-medium text-slate-700">账号密码</span>}
               rules={[
                 { required: true, message: '请输入密码' },
                 ...(mode === 'register'
                   ? [{ min: 8, message: '密码至少 8 位' } as const]
                   : []),
               ]}
+              className="mb-4!"
             >
               <Input.Password
-                prefix={<LockOutlined className="text-faint" />}
-                placeholder={mode === 'register' ? '至少 8 位' : '输入密码'}
+                prefix={<LockOutlined className="text-slate-400 text-xs" />}
+                placeholder={mode === 'register' ? '至少 8 位字符' : '输入您的密码'}
                 autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                className="rounded-md!"
               />
             </Form.Item>
 
             {error && (
               <Alert
-                className="mb-5"
+                className="mb-4 rounded-md text-xs"
                 type="error"
                 showIcon
                 message={error}
@@ -150,24 +160,32 @@ export default function LoginPage() {
               />
             )}
 
-            {/* 局部覆盖主色：只影响这一个按钮，全局主色仍是品牌色 */}
-            <ConfigProvider theme={darkPrimaryTheme}>
-              <Button block type="primary" htmlType="submit" loading={submitting}>
-                {mode === 'login' ? '登录' : '注册并进入'}
-              </Button>
-            </ConfigProvider>
+            <Button
+              block
+              type="primary"
+              htmlType="submit"
+              loading={submitting}
+              className="rounded-md! h-9! text-xs! font-semibold"
+            >
+              {mode === 'login' ? '登 录' : '创建新账号'}
+            </Button>
           </Form>
 
-          <p className="text-muted mt-6 text-sm">
-            {mode === 'login' ? '还没有账号？' : '已有账号？'}
-            <Button type="link" size="small" onClick={toggleMode}>
-              {mode === 'login' ? '注册' : '登录'}
-            </Button>
-          </p>
+          <div className="mt-6 text-center text-xs text-slate-500 pt-4 border-t border-slate-100">
+            <span>{mode === 'login' ? '还没有账号？' : '已有账号？'}</span>
+            <button
+              type="button"
+              onClick={toggleMode}
+              className="ml-1.5 text-blue-600 hover:text-blue-700 font-semibold cursor-pointer underline-offset-2 hover:underline"
+            >
+              {mode === 'login' ? '免费注册' : '返回登录'}
+            </button>
+          </div>
         </div>
 
-        <p className="text-faint mt-6 text-center text-xs">{APP_TAGLINE}</p>
+        <p className="mt-6 text-center text-[11px] text-slate-400 font-mono">{APP_TAGLINE}</p>
       </div>
     </div>
   )
 }
+
