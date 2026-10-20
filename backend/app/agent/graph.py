@@ -14,7 +14,7 @@
         其余                   → execute
 
 ⚠️ State 只保留 Annotation 声明过的 channel —— 未声明的 key 会被
-LangGraph **静默丢弃**（参考项目踩过的坑，写在这里防再犯）。
+LangGraph **静默丢弃**（踩过的坑，写在这里防再犯）。
 """
 
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 一次「对话轮」落成一条 agent_runs：instruction + plan（步骤数组 JSONB）+ 状态。
 步骤状态存在 plan JSONB 里（pending/queued/succeeded/…），表上的 status 是
-整轮的汇总 —— 这是参考项目验证过的形状：步骤级细节跟着轮次走，
+整轮的汇总 —— 步骤级细节跟着轮次走，
 刷新后从库里就能把「执行到哪一步了」完整恢复出来。
 """
 

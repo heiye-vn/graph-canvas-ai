@@ -1,5 +1,5 @@
 /**
- * 编辑器顶栏 —— 对齐参考项目的工具集与秩序（图1）。
+ * 编辑器顶栏 —— 主工具条 + 撤销/对比/缩放/导出/图层。
  *
  * 这里刻意**不做「工具注册表倒进顶栏」**：
  * 后端有 20 个工具，其中一多半是 move/resize/rename/reorder 这种底层原子操作，
@@ -45,7 +45,7 @@ const CROP_RATIOS: { value: CropRatio; label: string }[] = [
   { value: '16:9', label: '16:9' },
 ]
 
-/** 主工具条：顺序与参考项目一致，工具名用于查 /api/tools 判断是否真的可用。 */
+/** 主工具条：工具名用于查 /api/tools 判断是否真的可用。 */
 const PRIMARY_ACTIONS: {
   action: ToolbarAction
   label: string
@@ -165,7 +165,7 @@ export default function EditorToolbar({
 
   return (
     <header className="z-20 flex h-11 shrink-0 items-center gap-1.5 border-b border-slate-200 bg-white px-3">
-      {/* 左：标题 + 分辨率。刻意不做分隔线：参考项目里这一串是连贯的一条信息 */}
+      {/* 左：标题 + 分辨率。刻意不做分隔线：这一串是连贯的一条信息 */}
       <div className="flex max-w-52 shrink-0 items-center gap-2">
         <span className="truncate text-xs font-semibold text-slate-800" title={title}>
           {title}
@@ -179,7 +179,7 @@ export default function EditorToolbar({
       <div className="flex min-w-0 items-center gap-0.5 overflow-x-auto scrollbar-none">
         {cropping ? (
           <>
-            {/* 比例组按参考项目的胶囊样式：选中的那个才是白底 */}
+            {/* 比例组用胶囊样式：选中的那个才是白底 */}
             <div className="flex h-7 shrink-0 items-center gap-0.5 rounded-md border border-slate-200 bg-slate-50 p-0.5">
               {CROP_RATIOS.map((item) => (
                 <button

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 // 后端 API 与 SSE 的代理目标（本地开发用；生产由后端同源托管 dist）
-// 端口段 74xx：与参考项目 ai-picture-editor 的 73xx 错开，两套可同时启动
+// 端口段 74xx：本项目的固定号段，整体平移时同步 .env 与 docker-compose.yml
 const API_TARGET = 'http://127.0.0.1:7402'
 
 export default defineConfig({

@@ -1,5 +1,5 @@
 /**
- * 编辑工作台（M5.5 起为三栏外壳，M11 起对齐参考项目的工具秩序）。
+ * 编辑工作台（M5.5 起为三栏外壳，M11 起工具条按能力驱动渲染）。
  *
  *   顶栏：标题 / 主工具条 / 撤销重做 / 对比 / 缩放 / 导出 / 图层
  *   左：对话面板        中：画布 + 候选图条        右：图层 / 变换 / 工具 / 属性 / 编辑记录
@@ -462,7 +462,7 @@ export default function EditorPage() {
   const hiddenLayerIds = compare && topImageLayerId ? [topImageLayerId] : null;
 
   /**
-   * 裁剪模式的键盘：Esc 取消、Enter 确定（对齐参考项目）。
+   * 裁剪模式的键盘：Esc 取消、Enter 确定。
    *
    * 依赖里带上 cropBox / data：effect 闭包捕获的是本次渲染的 confirmCrop，
    * 不重建就会拿旧框去裁。
@@ -528,7 +528,7 @@ export default function EditorPage() {
   }
 
   /**
-   * 进入裁剪：裁的是**画布**（对齐参考项目），不是某个图层。
+   * 进入裁剪：裁的是**画布**，不是某个图层。
    *
    * 初始框内缩 8%：贴着边缘起框的话，四个手柄里有两个在画布外，
    * 用户第一步就得先猜「能往里拖」。

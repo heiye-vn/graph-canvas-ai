@@ -101,7 +101,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # 仅开发环境放开：前端 dev server 在 7401（本项目端口段 74xx，与参考项目 73xx 错开）
+    # 仅开发环境放开：前端 dev server 在 7401（本项目端口段 74xx）
     if not settings.is_production:
         from fastapi.middleware.cors import CORSMiddleware
 

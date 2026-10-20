@@ -381,7 +381,7 @@ class CropCanvasParams(BaseModel):
 
 
 async def crop_canvas(params: CropCanvasParams, ctx: ToolContext) -> ToolResult:
-    """按归一化矩形裁切画布（对齐参考项目 crop_canvas）。
+    """按归一化矩形裁切画布。
 
     图层**只平移、不缩放**：裁切是「换个视口」，不是「把内容放大」。
     超出新画布的部分由渲染层按画布边界裁掉，文档里仍完整保留 ——
@@ -609,7 +609,7 @@ def _tool(
     """注册一个内置工具。
 
     参数按固定顺序传是为了让下面那张清单**一眼能扫完**：
-    加工具时照抄一行再改，比对着一堆关键字参数找位置不容易漏。
+    加工具时照着上一行改，比对着一堆关键字参数找位置不容易漏。
     """
     register(
         ToolSpec(

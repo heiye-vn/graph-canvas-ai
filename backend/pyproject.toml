@@ -26,7 +26,7 @@ dependencies = [
     "httpx>=0.28",
 ]
 
-# 依赖分层（照抄参考项目的克制做法）：
+# 依赖分层（默认不装重依赖）：
 #   uv sync                 → 只装核心，本地跑流程零成本
 #   uv sync --extra agent   → 加 LLM / LangGraph
 #   uv sync --extra cv      → 加 rembg / onnxruntime / opencv（体积大，M6 才需要）
