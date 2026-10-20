@@ -208,3 +208,32 @@ def test_cross_user_access_is_404(client: TestClient):
 def test_assets_require_auth(client: TestClient):
     assert client.get("/api/assets").status_code == 401
     assert client.post("/api/assets/upload-ticket", json={}).status_code == 401
+
+
+def test_thumb_endpoint_serves_small_image(client: TestClient, user: dict):
+    """缩略图链路：AssetOut 带 thumb_url → 首次请求生成 480px 小图落桶 → 307 到预签名地址。"""
+    import httpx
+
+    data = make_png(1000, 800)
+    asset = upload_one(client, user, data, "image/png").json()
+    assert asset["thumb_url"].endswith(f"/assets/{asset['id']}/thumb")
+
+    redirect = client.get(
+        f"/api/assets/{asset['id']}/thumb", headers=auth(user), follow_redirects=False
+    )
+    assert redirect.status_code == 307
+    location = redirect.headers["location"]
+    assert ".thumb.jpg" in location
+
+    # 重定向目标是对象存储的真实地址，必须用真实 HTTP 客户端取：
+    # TestClient 的 follow_redirects 会把跨源 307 打回 ASGI 应用（共享 transport），
+    # 应用里没有这条路由 → 404，那是测试假象不是功能缺陷。
+    r = httpx.get(location, timeout=10, trust_env=False)
+    assert r.status_code == 200, r.text
+    img = Image.open(io.BytesIO(r.content))
+    assert img.format == "JPEG"
+    assert max(img.size) <= 480  # 长边压到 480 以内
+
+    # 写穿缓存：之后的请求直接命中已有小图，仍然 307
+    again = client.get(f"/api/assets/{asset['id']}/thumb", headers=auth(user), follow_redirects=False)
+    assert again.status_code == 307

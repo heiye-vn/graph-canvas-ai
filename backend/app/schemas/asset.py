@@ -18,6 +18,9 @@ class AssetOut(BaseModel):
     created_at: datetime
     # 预签名临时 URL：桶是私有的，前端一律用这个地址取图，不要把 s3_key 暴露出去
     url: str
+    # 缩略图入口（本服务地址，内部 307 到预签名小图）。卡片类展示一律用它，
+    # 原始 url 留给「看大图 / 进编辑器」。老调用方可能没传，允许缺省。
+    thumb_url: str | None = None
 
 
 class AssetListResponse(BaseModel):

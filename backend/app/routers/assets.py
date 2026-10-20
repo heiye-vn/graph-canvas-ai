@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -17,6 +18,7 @@ from app.schemas.asset import (
     UploadTicketRequest,
 )
 from app.services import assets as asset_service
+from app.services import storage
 
 router = APIRouter(prefix="/assets", tags=["assets"])
 
@@ -104,6 +106,25 @@ async def get_asset(
 ) -> AssetOut:
     asset = await asset_service.get_asset(session, user.id, asset_id)
     return asset_service.asset_to_out(asset)
+
+
+@router.get("/{asset_id}/thumb")
+async def asset_thumb(
+    asset_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> RedirectResponse:
+    """素材缩略图：首次请求现生成 480px 小图落桶（写穿缓存），之后 307 到预签名地址。
+
+    生成失败（源文件损坏等）降级回原始大图 —— 缩略图是锦上添花，
+    不能因为它没出来就让素材看不了。
+    """
+    asset = await asset_service.get_asset(session, user.id, asset_id)
+    try:
+        key = asset_service.ensure_thumb(asset)
+    except Exception:  # noqa: BLE001
+        key = asset.s3_key
+    return RedirectResponse(storage.presign_get(key), status_code=307)
 
 
 @router.delete("/{asset_id}", status_code=status.HTTP_204_NO_CONTENT)

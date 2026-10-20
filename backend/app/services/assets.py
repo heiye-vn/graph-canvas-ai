@@ -30,6 +30,15 @@ ALLOWED_FORMATS: dict[str, str] = {
 _EXT_OF_MIME = {v: k for k, v in ALLOWED_FORMATS.items()}
 _TICKET_TTL = 900
 
+# 缩略图：素材库卡片只有 ~160px 高，直接喂原图（动辄 3000px+ / 数 MB）
+# 首屏要下载+解码一整列大图 —— 列表卡顿的来源就是这个。
+_THUMB_MAX_SIDE = 480
+_THUMB_SUFFIX = ".thumb.jpg"
+
+
+def thumb_key_of(s3_key: str) -> str:
+    return f"{s3_key}{_THUMB_SUFFIX}"
+
 
 def probe_image(data: bytes) -> tuple[str, int, int]:
     """按**文件内容**（magic bytes）探测格式与尺寸。
@@ -152,7 +161,35 @@ def asset_to_out(asset: Asset) -> AssetOut:
         size=asset.size,
         created_at=asset.created_at,
         url=storage.presign_get(asset.s3_key),
+        # 缩略图按需生成（首访生成落桶，之后命中缓存），这里只拼入口地址，零存储开销
+        thumb_url=f"{get_settings().api_prefix}/assets/{asset.id}/thumb",
     )
+
+
+def ensure_thumb(asset: Asset) -> str:
+    """缩略图写穿缓存：首次请求从原图生成 480px 小图落桶，之后直接命中。
+
+    返回桶内 key；调用方自行 presign。
+    """
+    thumb_key = thumb_key_of(asset.s3_key)
+    if storage.object_exists(thumb_key):
+        return thumb_key
+
+    data = storage.get_object(asset.s3_key)
+    img = Image.open(io.BytesIO(data))
+    img.thumbnail((_THUMB_MAX_SIDE, _THUMB_MAX_SIDE), Image.LANCZOS)
+    if img.mode in ("RGBA", "LA", "P"):
+        # JPEG 没有 alpha：透明底按白底压平，别发黑
+        img = img.convert("RGBA")
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.split()[-1])
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    storage.put_object(thumb_key, buf.getvalue(), content_type="image/jpeg")
+    return thumb_key
 
 
 async def list_assets(session: AsyncSession, user_id: uuid.UUID) -> list[Asset]:
@@ -195,6 +232,10 @@ async def delete_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid
     try:
         storage.delete_object(asset.s3_key)
     except Exception:  # noqa: BLE001 - 记录已删，对象清理失败不影响主流程，交给后台清理
+        pass
+    try:
+        storage.delete_object(thumb_key_of(asset.s3_key))
+    except Exception:  # noqa: BLE001 - 同上，缩略图是派生物，清理失败无碍
         pass
 
 
