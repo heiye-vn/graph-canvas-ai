@@ -172,4 +172,4 @@
 
 ---
 
-*关键文件索引见各节内引用，均位于 `D:\ZSP\Study\Ai Agent\graph-canvas-ai\frontend\src\` 下。*
+*关键文件索引见各节内引用，路径均相对仓库根（`frontend/src/`）。*
