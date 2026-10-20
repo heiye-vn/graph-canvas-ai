@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     llm_base_url: str | None = None
     llm_temperature: float = 0.0
 
-    # ---- 可观测（M9.3 启用，缺失时不阻塞启动）----
+    # ---- 可观测：可选 Langfuse 旁路导出（不配则完全跳过，本地 trace 表照常）----
     langfuse_public_key: str | None = None
     langfuse_secret_key: str | None = None
     langfuse_host: str | None = None

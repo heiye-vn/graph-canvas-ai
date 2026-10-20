@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AgentRun, AgentTrace
 from app.models.agent_run import TERMINAL
+from app.services import langfuse_export
 from app.services import runs as runs_service
 
 logger = logging.getLogger("graph-canvas-ai.trace")
@@ -62,6 +63,21 @@ async def record(
         )
         session.add(trace)
         await session.flush()
+
+        # 旁路导出到 Langfuse（未配置 LANGFUSE_* 时完全 no-op）
+        langfuse_export.export_span(
+            agent_run_id=agent_run_id,
+            session_id=session_id,
+            kind=kind,
+            name=name,
+            status=status,
+            duration_ms=trace.duration_ms,
+            prompt_version=prompt_version,
+            model=model,
+            tokens_in=trace.tokens_in,
+            tokens_out=trace.tokens_out,
+            detail=detail,
+        )
     except Exception:  # noqa: BLE001 - 观测设施绝不连累主流程
         logger.warning("trace 落库失败（已忽略）", exc_info=True)
 
