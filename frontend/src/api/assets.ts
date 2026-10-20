@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost } from './client'
+import { apiDelete, apiGet, apiPost, tokenStore } from './client'
 
 export interface AssetOut {
   id: string
@@ -44,3 +44,21 @@ export const listAssets = () => apiGet<{ items: AssetOut[] }>('/assets')
 export const getAsset = (id: string) => apiGet<AssetOut>(`/assets/${id}`)
 
 export const deleteAsset = (id: string) => apiDelete<void>(`/assets/${id}`)
+
+/**
+ * 卡片展示用的图片地址。
+ *
+ * 缩略图走 API（`/assets/{id}/thumb`），而 `<img src>` 带不了 Authorization 头 ——
+ * 只能像 SSE 一样把令牌挂在 query 上。没有缩略图（如生成中的候选图）时回退原图，
+ * 那是预签名地址，本身就不需要令牌。
+ */
+export function assetThumbSrc(asset: {
+  thumb_url?: string | null
+  url: string
+}): string {
+  if (!asset.thumb_url) return asset.url
+  const token = tokenStore.get()
+  return token
+    ? `${asset.thumb_url}?token=${encodeURIComponent(token)}`
+    : asset.thumb_url
+}

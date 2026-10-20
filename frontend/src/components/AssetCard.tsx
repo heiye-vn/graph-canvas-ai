@@ -7,6 +7,8 @@
 import { Popconfirm, Tag, Tooltip } from 'antd'
 import { DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons'
 
+import { assetThumbSrc } from '@/api/assets'
+
 export interface AssetCardAsset {
   id: string
   url: string
@@ -37,7 +39,7 @@ export default function AssetCard({
       {/* 图像展示区 */}
       <div className="relative h-40 w-full overflow-hidden bg-slate-900/90">
         <img
-          src={asset.thumb_url ?? asset.url}
+          src={assetThumbSrc(asset)}
           alt=""
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           loading="lazy"

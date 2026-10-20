@@ -1,14 +1,14 @@
 """路由依赖：当前登录用户。
 
-SSE 之后也会用到它——届时浏览器原生 EventSource 带不了 Header，
-需要额外支持 query/短时 ticket 的方式，届时在这里扩展，不要让各路由各自解析 token。
+`<img>` 与 EventSource 都带不了 Authorization 头，这类入口（SSE、缩略图）
+允许 `?token=` 作为第二条通道；解析逻辑仍然只有 `user_from_token` 一处。
 """
 
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -49,6 +49,17 @@ async def get_current_user(
     session: AsyncSession = Depends(get_session),
 ) -> User:
     return await user_from_token(credentials.credentials if credentials else None, session)
+
+
+async def get_user_from_header_or_query(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    token: str | None = Query(default=None, description="媒体/SSE 入口的令牌通道"),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """给 `<img>` / EventSource 这类带不了 Header 的请求用：Header 优先，其次 query。"""
+    return await user_from_token(
+        credentials.credentials if credentials else token, session
+    )
 
 
 async def get_user_id_by_email(session: AsyncSession, email: str) -> UUID | None:

@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_session
-from app.deps import get_current_user
+from app.deps import get_current_user, get_user_from_header_or_query
 from app.models import User
 from app.schemas.asset import (
     AssetListResponse,
@@ -111,7 +111,8 @@ async def get_asset(
 @router.get("/{asset_id}/thumb")
 async def asset_thumb(
     asset_id: uuid.UUID,
-    user: User = Depends(get_current_user),
+    # <img> 带不了 Authorization 头，这里同时接受 ?token=
+    user: User = Depends(get_user_from_header_or_query),
     session: AsyncSession = Depends(get_session),
 ) -> RedirectResponse:
     """素材缩略图：首次请求现生成 480px 小图落桶（写穿缓存），之后 307 到预签名地址。

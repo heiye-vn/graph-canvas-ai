@@ -205,6 +205,24 @@ def test_cross_user_access_is_404(client: TestClient):
     assert client.get(f"/api/assets/{asset['id']}", headers=owner_headers).status_code == 200
 
 
+def test_thumb_accepts_query_token(client: TestClient, user: dict):
+    """`<img>` 带不了 Authorization 头：缩略图必须支持 ?token=（与 SSE 同一条通道）。"""
+    asset = upload_one(client, user, make_png(20, 10), "image/png").json()
+
+    ok = client.get(
+        f"/api/assets/{asset['id']}/thumb",
+        params={"token": user["token"]},
+        follow_redirects=False,
+    )
+    assert ok.status_code == 307
+
+    # 没有票据就是 401 —— 素材是私有资源，不能靠「猜 id」白拿
+    assert (
+        client.get(f"/api/assets/{asset['id']}/thumb", follow_redirects=False).status_code
+        == 401
+    )
+
+
 def test_assets_require_auth(client: TestClient):
     assert client.get("/api/assets").status_code == 401
     assert client.post("/api/assets/upload-ticket", json={}).status_code == 401
@@ -235,5 +253,7 @@ def test_thumb_endpoint_serves_small_image(client: TestClient, user: dict):
     assert max(img.size) <= 480  # 长边压到 480 以内
 
     # 写穿缓存：之后的请求直接命中已有小图，仍然 307
-    again = client.get(f"/api/assets/{asset['id']}/thumb", headers=auth(user), follow_redirects=False)
+    again = client.get(
+        f"/api/assets/{asset['id']}/thumb", headers=auth(user), follow_redirects=False
+    )
     assert again.status_code == 307
