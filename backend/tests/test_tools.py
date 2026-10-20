@@ -206,3 +206,123 @@ def test_doc_summary_handles_empty_canvas():
 def test_hidden_param_defaults_to_none_without_pinning():
     params = AddImageLayerParams(name="新图层")
     assert params.asset_id is None
+
+
+# ------------------------------------------------------------------ 画布手势的落点（M11）
+
+
+async def test_transform_layer_writes_all_geometry_in_one_step():
+    """一次手势 = 一条历史：位置/尺寸/角度必须一次写完。
+
+    拆成 move + resize + rotate 三个工具时，用户按一次撤销只会退回三分之一，
+    表现就是「撤销坏了」。
+    """
+    layer = image_layer("主体")
+    doc = doc_with(layer)
+    result = await tool_exec.invoke(
+        "transform_layer",
+        {
+            "layer": str(layer.id),
+            "x": 40,
+            "y": 60,
+            "width": 200,
+            "height": 180,
+            "rotation": 45,
+        },
+        ctx_of(doc),
+    )
+    transform = result.doc.layers[-1].transform
+    assert (transform.x, transform.y) == (40, 60)
+    assert (transform.width, transform.height) == (200, 180)
+    assert transform.rotation == 45
+
+
+async def test_transform_layer_keeps_untouched_fields():
+    """只传 rotation 时不能把翻转/位置顺手清零。"""
+    layer = image_layer("主体")
+    layer.transform.flip_x = True
+    layer.transform.x = 12
+    doc = doc_with(layer)
+    result = await tool_exec.invoke(
+        "transform_layer", {"layer": str(layer.id), "rotation": 90}, ctx_of(doc)
+    )
+    transform = result.doc.layers[-1].transform
+    assert transform.rotation == 90
+    assert transform.flip_x is True
+    assert transform.x == 12
+
+
+async def test_crop_layer_keeps_canvas_position_for_ui():
+    """画布拉框裁剪：裁完要留在原来的位置、保持原来的视觉尺寸。
+
+    只按裁剪区像素改 width/height 会把缩放过的图层「弹回 1:1」，
+    用户看到的就是裁一下图突然变大又跑位。
+    """
+    layer = image_layer("主体")
+    doc = doc_with(layer)
+    result = await tool_exec.invoke(
+        "crop_layer",
+        {
+            "layer": str(layer.id),
+            "x": 100,
+            "y": 50,
+            "width": 300,
+            "height": 200,
+            "place_at_x": 30,
+            "place_at_y": 40,
+            "display_width": 150,
+            "display_height": 100,
+        },
+        ctx_of(doc),
+    )
+    cropped = result.doc.layers[-1]
+    assert cropped.crop is not None
+    assert (cropped.crop.x, cropped.crop.y) == (100, 50)
+    assert (cropped.crop.width, cropped.crop.height) == (300, 200)
+    assert (cropped.transform.x, cropped.transform.y) == (30, 40)
+    assert (cropped.transform.width, cropped.transform.height) == (150, 100)
+
+
+# ------------------------------------------------------------------ 裁画布（M11）
+
+
+async def test_crop_canvas_shrinks_canvas_and_translates_layers():
+    """裁画布：画布变小，图层只平移不缩放（像素仍按画布边界裁）。"""
+    layer = image_layer("主体")
+    layer.transform.x = 100
+    layer.transform.y = 60
+    doc = doc_with(layer)
+    result = await tool_exec.invoke(
+        "crop_canvas",
+        {"x": 0.25, "y": 0.25, "width": 0.5, "height": 0.5},
+        ctx_of(doc),
+    )
+
+    assert result.doc.canvas.width == 256
+    assert result.doc.canvas.height == 256
+    assert result.doc.layers[-1].transform.x == 100 - 128
+    assert result.doc.layers[-1].transform.y == 60 - 128
+    # 尺寸不变：裁剪是换视口，不是放大内容
+    assert result.doc.layers[-1].transform.width is None
+
+
+async def test_crop_canvas_clamps_to_canvas_bounds():
+    """归一化矩形越界时以画布边界为准，不能出现负尺寸或超界画布。"""
+    doc = doc_with(image_layer("主体"))
+    result = await tool_exec.invoke(
+        "crop_canvas",
+        {"x": 0.75, "y": 0.75, "width": 0.5, "height": 0.5},
+        ctx_of(doc),
+    )
+    assert result.doc.canvas.width == 128
+    assert result.doc.canvas.height == 128
+
+
+async def test_crop_canvas_rejects_too_small():
+    doc = doc_with(image_layer("主体"))
+    with pytest.raises(ToolError):
+        await tool_exec.invoke(
+            "crop_canvas",
+            {"x": 0, "y": 0, "width": 0.01, "height": 0.5},
+            ctx_of(doc),
+        )

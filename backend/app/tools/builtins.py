@@ -22,6 +22,9 @@ from app.services import layer_doc as L
 from app.tools.base import ToolContext, ToolError, ToolResult, ToolSpec
 from app.tools.registry import register
 
+# 裁画布的最短边：再小就没有编辑意义了，而且 Stage/缩略图都会失去参照
+_MIN_CANVAS_EDGE = 16
+
 
 class LayerRef(BaseModel):
     """所有「作用于某个图层」的工具共用这一段参数。"""
@@ -39,7 +42,17 @@ def _target(ctx: ToolContext, ref: str | None):
         return L.resolve_layer(ctx.doc, ref)
     except L.LayerNotFoundError as exc:
         names = [layer.name for layer in L.top_down(ctx.doc)] or ["（这个会话还没有图层）"]
-        raise ToolError(f"找不到图层{exc}。当前可选：{'、'.join(names)}", code="no_layer") from exc
+        listing = "、".join(names)
+        # LayerNotFoundError 的文案本身已经是「找不到匹配的图层」，别再套一层「找不到图层」
+        if exc.ref is None:
+            raise ToolError(
+                f"没有可操作的可见图像层（可能被隐藏，或不是图片层）。"
+                f"当前图层：{listing}",
+                code="no_layer",
+            ) from exc
+        raise ToolError(
+            f"找不到图层「{exc.ref}」。当前可选：{listing}", code="no_layer"
+        ) from exc
 
 
 def _layer_id(ctx: ToolContext, ref: str | None) -> uuid.UUID:
@@ -58,13 +71,41 @@ class AdjustColorParams(LayerRef):
         default=0, ge=-100, le=100, description="对比度，-100~100",
         json_schema_extra={"label": "对比度"},
     )
-    saturation: int = Field(
-        default=0, ge=-100, le=100, description="饱和度，-100~100",
-        json_schema_extra={"label": "饱和度"},
+    highlights: int = Field(
+        default=0, ge=-100, le=100, description="高光，-100~100（只影响亮部）",
+        json_schema_extra={"label": "高光"},
+    )
+    shadows: int = Field(
+        default=0, ge=-100, le=100, description="阴影，-100~100（只影响暗部）",
+        json_schema_extra={"label": "阴影"},
     )
     temperature: int = Field(
         default=0, ge=-100, le=100, description="色温，-100~100（正值为暖）",
         json_schema_extra={"label": "色温"},
+    )
+    tint: int = Field(
+        default=0, ge=-100, le=100, description="色调，-100~100（正值为品红，负值为绿）",
+        json_schema_extra={"label": "色调"},
+    )
+    saturation: int = Field(
+        default=0, ge=-100, le=100, description="饱和度，-100~100",
+        json_schema_extra={"label": "饱和度"},
+    )
+    vibrance: int = Field(
+        default=0, ge=-100, le=100, description="自然饱和度，-100~100（少饱和的像素多改）",
+        json_schema_extra={"label": "自然饱和度"},
+    )
+    sharpness: int = Field(
+        default=0, ge=-100, le=100, description="锐化，-100~100",
+        json_schema_extra={"label": "锐化"},
+    )
+    clarity: int = Field(
+        default=0, ge=-100, le=100, description="清晰度，-100~100（更大半径的局部对比）",
+        json_schema_extra={"label": "清晰度"},
+    )
+    vignette: int = Field(
+        default=0, ge=0, le=100, description="晕影，0~100（越大四角越暗）",
+        json_schema_extra={"label": "晕影"},
     )
 
 
@@ -77,12 +118,19 @@ async def adjust_color(params: AdjustColorParams, ctx: ToolContext) -> ToolResul
             "adjustments": Adjustments(
                 brightness=params.brightness,
                 contrast=params.contrast,
-                saturation=params.saturation,
+                highlights=params.highlights,
+                shadows=params.shadows,
                 temperature=params.temperature,
+                tint=params.tint,
+                saturation=params.saturation,
+                vibrance=params.vibrance,
+                sharpness=params.sharpness,
+                clarity=params.clarity,
+                vignette=params.vignette,
             )
         },
     )
-    return ToolResult(doc, f"已调整「{layer.name}」的明度/对比度/饱和度/色温")
+    return ToolResult(doc, f"已调整「{layer.name}」的色彩与细节")
 
 
 class SetOpacityParams(LayerRef):
@@ -185,6 +233,56 @@ async def rotate_layer(params: RotateLayerParams, ctx: ToolContext) -> ToolResul
     return ToolResult(doc, f"「{layer.name}」已旋转 {params.degrees}°")
 
 
+class TransformLayerParams(LayerRef):
+    """画布手势的落点：拖动 / 缩放 / 旋转松手后一次写回。
+
+    为什么单独做一个工具而不是让前端连调 move + resize + rotate：
+    一次手势在撤销栈里必须只有一条记录。三个工具 = 用户按一次撤销
+    只退回手速的三分之一，看起来像「撤销坏了」。
+    """
+
+    x: float | None = Field(
+        default=None, description="左上角横坐标（画布像素）",
+        json_schema_extra={"label": "X"},
+    )
+    y: float | None = Field(
+        default=None, description="左上角纵坐标（画布像素）",
+        json_schema_extra={"label": "Y"},
+    )
+    width: float | None = Field(
+        default=None, gt=0, le=8192, description="宽度（画布像素）",
+        json_schema_extra={"label": "宽度"},
+    )
+    height: float | None = Field(
+        default=None, gt=0, le=8192, description="高度（画布像素）",
+        json_schema_extra={"label": "高度"},
+    )
+    rotation: float | None = Field(
+        default=None, ge=-360, le=360, description="旋转角度（绕图层中心）",
+        json_schema_extra={"label": "角度"},
+    )
+
+
+async def transform_layer(params: TransformLayerParams, ctx: ToolContext) -> ToolResult:
+    layer = _target(ctx, params.layer)
+    patch = {
+        key: value
+        for key, value in {
+            "x": params.x,
+            "y": params.y,
+            "width": params.width,
+            "height": params.height,
+            "rotation": params.rotation,
+        }.items()
+        if value is not None
+    }
+    if not patch:
+        raise ToolError("没有需要修改的变换参数", code="no_params")
+
+    doc = L.update_layer(ctx.doc, layer.id, {"transform": patch})
+    return ToolResult(doc, f"「{layer.name}」的变换已更新")
+
+
 # ------------------------------------------------------------------ 裁剪与翻转
 
 
@@ -203,21 +301,114 @@ class CropLayerParams(LayerRef):
     height: int = Field(
         gt=0, le=8192, description="裁剪高度（像素）", json_schema_extra={"label": "高度"}
     )
+    # 下面四个是**界面专用**：画布上拉框裁剪时，裁剪块要留在原来的位置、
+    # 保持原来的视觉尺寸。模型不会知道画布坐标，所以对模型隐藏。
+    place_at_x: float | None = Field(
+        default=None,
+        description="裁剪后图层左上角在画布上的 X；界面拉框裁剪时回填",
+        json_schema_extra={"label": "画布 X", "agent_hidden": True},
+    )
+    place_at_y: float | None = Field(
+        default=None,
+        description="裁剪后图层左上角在画布上的 Y；界面拉框裁剪时回填",
+        json_schema_extra={"label": "画布 Y", "agent_hidden": True},
+    )
+    display_width: float | None = Field(
+        default=None,
+        gt=0,
+        description="裁剪后图层的显示宽度（画布像素）；不填则用裁剪区像素",
+        json_schema_extra={"label": "显示宽度", "agent_hidden": True},
+    )
+    display_height: float | None = Field(
+        default=None,
+        gt=0,
+        description="裁剪后图层的显示高度（画布像素）；不填则用裁剪区像素",
+        json_schema_extra={"label": "显示高度", "agent_hidden": True},
+    )
 
 
 async def crop_layer(params: CropLayerParams, ctx: ToolContext) -> ToolResult:
     layer = _target(ctx, params.layer)
+    transform: dict[str, float] = {}
+    if params.display_width is not None:
+        transform["width"] = params.display_width
+    if params.display_height is not None:
+        transform["height"] = params.display_height
+    if params.place_at_x is not None:
+        transform["x"] = params.place_at_x
+    if params.place_at_y is not None:
+        transform["y"] = params.place_at_y
+    if not transform:
+        # 显示尺寸同步为裁剪尺寸：裁下来的那一块按原大小放下，
+        # 而不是把 100×100 的裁剪区拉满原本 1000×1000 的框（那是缩放，不是裁剪）
+        transform = {"width": params.width, "height": params.height}
+
     doc = L.update_layer(
         ctx.doc,
         layer.id,
         {
             "crop": Crop(x=params.x, y=params.y, width=params.width, height=params.height),
-            # 显示尺寸同步为裁剪尺寸：裁下来的那一块按原大小放下，
-            # 而不是把 100×100 的裁剪区拉满原本 1000×1000 的框（那是缩放，不是裁剪）
-            "transform": {"width": params.width, "height": params.height},
+            "transform": transform,
         },
     )
     return ToolResult(doc, f"「{layer.name}」已裁剪为 {params.width}×{params.height}")
+
+
+class CropCanvasParams(BaseModel):
+    """裁画布：归一化矩形（0~1），裁完画布变小、图层只平移。
+
+    为什么不接受像素坐标：界面上的裁剪框是按当前画布算的，
+    而 draw 的缩放、图层是否铺满都会动摇「像素」这个基准。
+    归一化之后，前端只报「裁掉哪一块比例」，服务端自己乘画布尺寸。
+    """
+
+    x: float = Field(
+        default=0, ge=0, le=1, description="裁剪框左边缘（画布宽度的比例）",
+        json_schema_extra={"label": "左边缘"},
+    )
+    y: float = Field(
+        default=0, ge=0, le=1, description="裁剪框上边缘（画布高度的比例）",
+        json_schema_extra={"label": "上边缘"},
+    )
+    width: float = Field(
+        default=1, gt=0, le=1, description="裁剪框宽度（画布宽度的比例）",
+        json_schema_extra={"label": "宽度"},
+    )
+    height: float = Field(
+        default=1, gt=0, le=1, description="裁剪框高度（画布高度的比例）",
+        json_schema_extra={"label": "高度"},
+    )
+
+
+async def crop_canvas(params: CropCanvasParams, ctx: ToolContext) -> ToolResult:
+    """按归一化矩形裁切画布（对齐参考项目 crop_canvas）。
+
+    图层**只平移、不缩放**：裁切是「换个视口」，不是「把内容放大」。
+    超出新画布的部分由渲染层按画布边界裁掉，文档里仍完整保留 ——
+    撤销回来还是原来那张图。
+    """
+    canvas = ctx.doc.canvas
+    left = max(0, round(params.x * canvas.width))
+    top = max(0, round(params.y * canvas.height))
+    width = min(canvas.width - left, round(params.width * canvas.width))
+    height = min(canvas.height - top, round(params.height * canvas.height))
+    if width < _MIN_CANVAS_EDGE or height < _MIN_CANVAS_EDGE:
+        raise ToolError(
+            f"裁剪区域太小：最短边需不小于 {_MIN_CANVAS_EDGE} 像素",
+            code="crop_too_small",
+        )
+
+    updated = ctx.doc.model_copy(deep=True)
+    for layer in updated.layers:
+        layer.transform.x -= left
+        layer.transform.y -= top
+    updated.canvas.width = width
+    updated.canvas.height = height
+    # 重新校验（layers 是可变模型，直接改字段后走一遍 schema）
+    from app.schemas.layer_doc import LayerDocument
+
+    updated = LayerDocument.model_validate(updated.model_dump(mode="json"))
+    return ToolResult(updated, f"画布已裁剪为 {width}×{height}")
 
 
 class ResetCropParams(LayerRef):
@@ -489,6 +680,11 @@ def install_builtin_tools() -> None:
         RotateLayerParams, rotate_layer, "变换",
     )
     _tool(
+        "transform_layer", "变换",
+        "一次设置图层的位置、尺寸与旋转角度（画布手势的落点）",
+        TransformLayerParams, transform_layer, "变换",
+    )
+    _tool(
         "add_text_layer", "加文字",
         "新增一个文字层（文案、字号、颜色、位置）",
         AddTextLayerParams, add_text_layer, "内容",
@@ -502,6 +698,11 @@ def install_builtin_tools() -> None:
         "crop_layer", "裁剪",
         "裁剪某个图层到指定区域（按素材原始像素）",
         CropLayerParams, crop_layer, "变换",
+    )
+    _tool(
+        "crop_canvas", "裁剪画布",
+        "按归一化矩形裁剪整块画布：画布变小，图层只平移不缩放",
+        CropCanvasParams, crop_canvas, "画布",
     )
     _tool(
         "reset_crop", "还原裁剪",

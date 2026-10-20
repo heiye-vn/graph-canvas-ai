@@ -7,6 +7,7 @@
 
 from app.tools import (
     builtins,  # noqa: F401  导入即注册
+    enhance,  # noqa: F401  M11 去背景 / 换背景 / 扩图 / 超分（排队型工具）
     region,  # noqa: F401  M6 局部编辑（排队型工具）
 )
 from app.tools import (

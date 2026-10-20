@@ -100,16 +100,25 @@ class TextContent(BaseModel):
 
 
 class Adjustments(BaseModel):
-    """非破坏性调色，范围 -100~100，0 表示不动。
+    """非破坏性调色，范围 -100~100，0 表示不动（晕影 0~100，只加暗）。
 
     刻意不做成「调整图层」：MVP 阶段每个图层自带一组参数，
     工具改哪个图层的结果是确定的，不需要用户理解「作用于下方所有图层」这件事。
+
+    ⚠️ 新增字段一律带默认值，**不升 DOC_VERSION**：老文档读出来就是「这一项没调过」。
     """
 
     brightness: float = Field(default=0, ge=-100, le=100)
     contrast: float = Field(default=0, ge=-100, le=100)
-    saturation: float = Field(default=0, ge=-100, le=100)
+    highlights: float = Field(default=0, ge=-100, le=100)
+    shadows: float = Field(default=0, ge=-100, le=100)
     temperature: float = Field(default=0, ge=-100, le=100)
+    tint: float = Field(default=0, ge=-100, le=100)
+    saturation: float = Field(default=0, ge=-100, le=100)
+    vibrance: float = Field(default=0, ge=-100, le=100)
+    sharpness: float = Field(default=0, ge=-100, le=100)
+    clarity: float = Field(default=0, ge=-100, le=100)
+    vignette: float = Field(default=0, ge=0, le=100)
 
 
 class Layer(BaseModel):

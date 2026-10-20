@@ -151,6 +151,30 @@ def test_invoke_unknown_layer_is_422(client: TestClient, user: dict):
     r = invoke(client, user, "adjust_color", session["id"], {"layer": "不存在的图层"})
     assert r.status_code == 422
     assert "找不到图层" in r.json()["detail"]
+    assert "当前可选" in r.json()["detail"]
+
+
+def test_invoke_without_visible_image_layer_explains_why(client: TestClient, user: dict):
+    """默认目标（最上层可见图像层）不存在时，要说清「为什么没有」和「现有图层」。
+
+    回归：这里曾经把 LayerNotFoundError 的「找不到匹配的图层」再套一层
+    「找不到图层」，用户看到的是「找不到图层找不到匹配的图层」，且没说清是
+    图层被隐藏了。
+    """
+    session = make_session(client, user)
+    layer_id = session["doc"]["layers"][0]["id"]
+
+    hidden = invoke(
+        client, user, "set_layer_visible", session["id"], {"layer": layer_id, "visible": False}
+    )
+    assert hidden.status_code == 200, hidden.text
+
+    r = invoke(client, user, "adjust_color", session["id"], {"brightness": 10})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "可见图像层" in detail
+    assert "找不到图层" not in detail
+    assert session["doc"]["layers"][0]["name"] in detail
 
 
 def test_invoke_on_other_users_session_is_404(client: TestClient, user: dict):

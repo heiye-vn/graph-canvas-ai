@@ -10,15 +10,27 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
+import json
 import uuid
+import zipfile
+from datetime import UTC, datetime
+from typing import Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.deps import get_current_user
-from app.models import User
+from app.edits.fit import DEFAULT_RATIOS, DELIVERY_SIZES, letterbox
+from app.models import SessionAsset, User
+from app.schemas.asset import AssetOut
 from app.schemas.history import HistoryEntry, HistoryOut, TimeTravelOut
+from app.schemas.layer_doc import LayerDocument
 from app.schemas.session import (
     AddSessionAssetsRequest,
     CreateSessionRequest,
@@ -29,9 +41,12 @@ from app.schemas.session import (
     SessionSummary,
     UpdateSessionRequest,
 )
+from app.services import assets as asset_service
+from app.services import flatten as flatten_service
 from app.services import history as history_service
 from app.services import selections as selections_service
 from app.services import sessions as sessions_service
+from app.services import storage
 from app.services.selections import EmptySelection, StaleSelection
 
 router = APIRouter(prefix="/edit-sessions", tags=["edit-sessions"])
@@ -302,3 +317,140 @@ async def delete_selection(
 ) -> None:
     record = await sessions_service.get_edit_session(session, user.id, session_id)
     await selections_service.clear(record.id)
+
+
+# ---------------------------------------------------------------- 导出物料（M11）
+#
+# 两个接口分工明确：
+#   POST export-sizes  —— 把当前画布完整放进三档投放比例（letterbox，不裁切），
+#                        结果落成素材并挂到会话；纯 Pillow，不调模型。
+#   GET  export        —— 把勾选的素材打包成 ZIP（含 manifest.json）下载。
+#
+# 为什么不走工具框架：这两个操作**不改图层文档**，而工具契约里 ToolResult 只有
+# (doc, message)，塞不下「一批新资产」。导出是交付动作，不是编辑动作。
+
+
+class ExportSizesRequest(BaseModel):
+    ratios: list[Literal["1:1", "4:5", "9:16"]] = Field(
+        default_factory=lambda: list(DEFAULT_RATIOS),
+        min_length=1,
+        max_length=3,
+    )
+
+
+class ExportSizesResponse(BaseModel):
+    items: list[AssetOut]
+
+
+@router.post("/{session_id}/export-sizes", response_model=ExportSizesResponse)
+async def create_export_sizes(
+    session_id: uuid.UUID,
+    payload: ExportSizesRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ExportSizesResponse:
+    record = await sessions_service.get_edit_session(session, user.id, session_id)
+    doc = LayerDocument.model_validate(record.doc)
+    # 用当前画布的真实合成结果（含调色/裁剪/旋转），与前端看到的一致
+    source = await flatten_service.flatten_session(session, record)
+
+    created = []
+    for ratio in dict.fromkeys(payload.ratios):
+        width, height = DELIVERY_SIZES[ratio]
+        data = await asyncio.to_thread(
+            letterbox,
+            source,
+            width,
+            height,
+            background=doc.canvas.background,
+        )
+        asset = await asset_service.create_from_bytes(
+            session, user_id=user.id, data=data, kind="export"
+        )
+        session.add(SessionAsset(session_id=record.id, asset_id=asset.id))
+        created.append(asset)
+
+    await session.commit()
+    return ExportSizesResponse(
+        items=[asset_service.asset_to_out(asset) for asset in created]
+    )
+
+
+@router.get("/{session_id}/export")
+async def export_zip(
+    session_id: uuid.UUID,
+    asset_ids: str,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> StreamingResponse:
+    record = await sessions_service.get_edit_session(session, user.id, session_id)
+    try:
+        wanted = [uuid.UUID(value) for value in asset_ids.split(",") if value]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="asset_ids 格式不对"
+        ) from exc
+
+    # 只允许打包**这个会话里**的素材：同一用户不代表可以跨会话拖文件
+    allowed = set(await sessions_service.session_assets(session, record.id))
+    doc = LayerDocument.model_validate(record.doc)
+    for layer in doc.layers:
+        if layer.source is not None:
+            allowed.add(layer.source.asset_id)
+
+    chosen = [asset_id for asset_id in dict.fromkeys(wanted) if asset_id in allowed]
+    if not chosen:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="没有可导出的素材"
+        )
+
+    found = await asset_service.list_assets_by_ids(session, user.id, chosen)
+    by_id = {asset.id: asset for asset in found}
+
+    buffer = io.BytesIO()
+    items: list[dict] = []
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for index, asset_id in enumerate(chosen, start=1):
+            asset = by_id.get(asset_id)
+            if asset is None:
+                continue
+            data = await asyncio.to_thread(storage.get_object, asset.s3_key)
+            name = (
+                f"{index:02d}-{asset.width or 0}x{asset.height or 0}"
+                f"-{str(asset.id)[:8]}.png"
+            )
+            bundle.writestr(name, data)
+            items.append(
+                {
+                    "file": name,
+                    "width": asset.width,
+                    "height": asset.height,
+                    "asset_id": str(asset.id),
+                }
+            )
+        bundle.writestr(
+            "manifest.json",
+            json.dumps(
+                {
+                    "title": record.title,
+                    "session_id": str(record.id),
+                    "created_at": datetime.now(UTC).isoformat(),
+                    "items": items,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+        )
+
+    buffer.seek(0)
+    ascii_name = f"graph-canvas-{record.id}.zip"
+    encoded = quote(f"{record.title or 'export'}.zip")
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+            )
+        },
+    )

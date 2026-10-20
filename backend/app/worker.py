@@ -10,6 +10,13 @@ import logging
 from arq.connections import RedisSettings
 
 from app.config import get_settings
+from app.tasks.enhance import (
+    edit_image,
+    expand_canvas,
+    remove_background,
+    replace_background,
+    upscale_image,
+)
 from app.tasks.image import text_to_image
 from app.tasks.region import inpaint_region
 from app.tasks.split import split_layers
@@ -38,7 +45,16 @@ async def shutdown(ctx) -> None:
 
 
 class WorkerSettings:
-    functions = [text_to_image, inpaint_region, split_layers]
+    functions = [
+        text_to_image,
+        inpaint_region,
+        split_layers,
+        remove_background,
+        replace_background,
+        expand_canvas,
+        upscale_image,
+        edit_image,
+    ]
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 4
     job_timeout = 300

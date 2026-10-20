@@ -122,7 +122,11 @@ register(
     ToolSpec(
         name="replace_region",
         label="局部替换",
-        description="按文字描述替换当前选区内的内容。用户还没有选区时，先提示他点选或涂抹要修改的区域，不要直接调用。",
+        description=(
+            "按文字描述替换当前选区内的内容。只在用户已经画了选区、"
+            "或明确要求「只改选区」时使用；没有选区却要改某个对象（颜色、材质）时"
+            "改用 edit_image，不要要求用户先选区。"
+        ),
         params_model=ReplaceRegionParams,
         handler=replace_region_submit,
         group="生成",

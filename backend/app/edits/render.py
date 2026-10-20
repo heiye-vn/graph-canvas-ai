@@ -86,77 +86,129 @@ def flatten(
 
 def _apply_adjustments(source: Image.Image, layer: Layer) -> Image.Image:
     adj = layer.adjustments
-    if (adj.brightness, adj.contrast, adj.saturation, adj.temperature) == (0, 0, 0, 0):
+    if not any(
+        (
+            adj.brightness,
+            adj.contrast,
+            adj.highlights,
+            adj.shadows,
+            adj.temperature,
+            adj.tint,
+            adj.saturation,
+            adj.vibrance,
+            adj.sharpness,
+            adj.clarity,
+            adj.vignette,
+        )
+    ):
         return source
 
     try:
         import numpy as np
+    except ImportError as exc:  # pragma: no cover - 依赖缺失才走到
+        # 不再退回「只支持四项」的 PIL 近似：那会让高光/阴影/锐化等新参数静默失效，
+        # 画布（前端精确算）与拍平结果直接不是一张图。宁可报错。
+        raise RuntimeError("拍平调色需要 numpy：backend 依赖里已声明") from exc
 
-        return _adjust_numpy(np.asarray(source.convert("RGBA")).copy(), adj)
-    except ImportError:
-        return _adjust_pil(source, adj)
+    return _adjust_numpy(np.asarray(source.convert("RGBA")).copy(), adj)
 
 
 def _adjust_numpy(pixels, adj) -> Image.Image:
-    """逐字复刻前端 adjustPixels 的数学（顺序：对比 → 明度 → 饱和 → 色温）。"""
+    """逐字复刻前端 adjustPixels 的数学。
+
+    顺序固定：对比 → 明度 → 高光/阴影 → 色温/色调 → 饱和 → 自然饱和
+    → 锐化 → 清晰度 → 晕影。`frontend/src/domain/pixels.ts` 必须同序 ——
+    顺序一换，颜色就会差一截，而「画布上看到的」和「拍平喂给模型的」
+    必须是同一张图。
+    """
     import numpy as np
+    from PIL import ImageFilter
 
     step = 2.55
     contrast = adj.contrast * step
     factor = (259 * (contrast + 255)) / max(255 * (259 - contrast), 1)
     brightness = adj.brightness * step
-    saturation = adj.saturation / 100
+    highlights = adj.highlights / 100
+    shadows = adj.shadows / 100
     warm = (adj.temperature / 100) * 24
+    tint = adj.tint / 100
+    saturation = adj.saturation / 100
+    vibrance = adj.vibrance / 100
 
+    alpha = pixels[:, :, 3].copy()
     rgb = pixels[:, :, :3].astype(np.float32)
+
     if contrast != 0:
         rgb = factor * (rgb - 128) + 128
     if brightness != 0:
         rgb = rgb + brightness
+    if highlights != 0 or shadows != 0:
+        # 按亮度线性分配：亮部吃高光、暗部吃阴影，中间调基本不动
+        luma = (
+            0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
+        ) / 255
+        lift = shadows * (1 - luma) * 64 + highlights * luma * 64
+        rgb = rgb + lift[:, :, None]
+    if warm != 0 or tint != 0:
+        # 暖 = 红多蓝少；色调正品红、负绿。G 只吃色调，动它会把肤色推向品红
+        rgb[:, :, 0] += warm + tint * 12
+        rgb[:, :, 1] -= tint * 20
+        rgb[:, :, 2] -= warm + tint * 12
     if saturation != 0:
         gray = (
             0.2126 * rgb[:, :, 0] + 0.7152 * rgb[:, :, 1] + 0.0722 * rgb[:, :, 2]
         )[:, :, None]
         rgb = gray + (rgb - gray) * (1 + saturation)
-    if warm != 0:
-        # 暖 = 红多蓝少。刻意只对 R/B 施力：动 G 会把肤色推向品红
-        rgb[:, :, 0] += warm
-        rgb[:, :, 2] -= warm
+    if vibrance != 0:
+        # 自然饱和度：本来就鲜艳的像素少改，灰扑扑的多改
+        average = rgb.mean(axis=2, keepdims=True)
+        chroma = np.abs(rgb - average).sum(axis=2, keepdims=True) / 3
+        weight = vibrance * np.maximum(0, 1 - chroma / 128)
+        rgb = rgb + (rgb - average) * weight
 
-    pixels[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
-    return Image.fromarray(pixels, mode="RGBA")
+    image = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
 
+    # 邻域运算放在颜色之后；负值退化成模糊（与把滑杆拖到负数的直觉一致）
+    if adj.sharpness:
+        if adj.sharpness > 0:
+            image = image.filter(
+                ImageFilter.UnsharpMask(
+                    radius=1, percent=int(adj.sharpness), threshold=0
+                )
+            )
+        else:
+            image = image.filter(
+                ImageFilter.GaussianBlur(radius=abs(adj.sharpness) / 200)
+            )
+    if adj.clarity:
+        if adj.clarity > 0:
+            image = image.filter(
+                ImageFilter.UnsharpMask(
+                    radius=2, percent=int(adj.clarity * 0.8), threshold=2
+                )
+            )
+        else:
+            image = image.filter(
+                ImageFilter.GaussianBlur(radius=abs(adj.clarity) / 150)
+            )
 
-def _adjust_pil(source: Image.Image, adj) -> Image.Image:
-    """没有 numpy 时的近似路径：逐通道 LUT + 601 灰度混饱和。"""
-    step = 2.55
-    contrast = adj.contrast * step
-    factor = (259 * (contrast + 255)) / max(255 * (259 - contrast), 1)
-    brightness = adj.brightness * step
+    rgb = np.asarray(image).astype(np.float32)
 
-    lut = []
-    for value in range(256):
-        v = value
-        if contrast != 0:
-            v = factor * (v - 128) + 128
-        if brightness != 0:
-            v = v + brightness
-        lut.append(max(0, min(255, int(v))))
-    rgb = source.convert("RGB").point(lut * 3)
-    if adj.saturation != 0:
-        gray = rgb.convert("L")
-        mixed = Image.blend(gray.convert("RGB"), rgb, 1 + adj.saturation / 100)
-        rgb = mixed
-    if adj.temperature != 0:
-        warm = int((adj.temperature / 100) * 24)
-        r, g, b = rgb.split()
-        r = r.point(lambda v: max(0, min(255, v + warm)))
-        b = b.point(lambda v: max(0, min(255, v - warm)))
-        rgb = Image.merge("RGB", (r, g, b))
-    out = Image.new("RGBA", source.size)
-    out.paste(rgb, (0, 0))
-    out.putalpha(source.getchannel("A"))
-    return out
+    if adj.vignette:
+        height, width = rgb.shape[:2]
+        ys, xs = np.mgrid[0:height, 0:width]
+        cx, cy = (width - 1) / 2, (height - 1) / 2
+        farthest = float(np.hypot(cx, cy)) or 1.0
+        distance = np.hypot(xs - cx, ys - cy) / farthest
+        shade = 1 - (adj.vignette / 100) * np.power(
+            np.minimum(1.0, distance), 1.6
+        )
+        rgb = rgb * shade[:, :, None]
+
+    out = np.zeros((rgb.shape[0], rgb.shape[1], 4), dtype=np.uint8)
+    out[:, :, :3] = np.clip(rgb, 0, 255).astype(np.uint8)
+    out[:, :, 3] = alpha
+    return Image.fromarray(out, mode="RGBA")
 
 
 def _composite_text(canvas: Image.Image, layer: Layer) -> None:
