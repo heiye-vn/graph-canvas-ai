@@ -47,11 +47,22 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* 工作台是全屏应用，页面级横向滚动没有意义。
+     antd Slider 的数值气泡挂在 body 下，悬停贴近窗口右缘的滑杆时
+     会把 html 的 scrollWidth 撑出一条滚动条 —— 在这里一刀切掉。 */
+  html,
+  body {
+    overflow-x: hidden;
+  }
+
   body {
     @apply bg-canvas text-ink antialiased;
+    /* 与 antdTheme.ts 的 token.fontFamily 逐字一致（别分叉：
+       顺序不同 = antd 组件与普通文本落到不同中文字体） */
     font-family:
-      'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "PingFang SC",
-      "HarmonyOS Sans SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+      'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+      Roboto, 'PingFang SC', 'HarmonyOS Sans SC', 'Hiragino Sans GB',
+      'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
@@ -78,3 +89,12 @@
   }
 }
 
+
+/* 横向滚动容器（顶栏工具条、底部胶卷条）：藏掉滚动条，避免 6px 的条把一行挤高 */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

@@ -16,7 +16,7 @@ const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
   { to: '/create', label: '创作', icon: <PlusOutlined /> },
   { to: '/assets', label: '素材', icon: <AppstoreOutlined /> },
   { to: '/editor', label: '编辑', icon: <EditOutlined /> },
-  { to: '/metrics', label: '指标', icon: <BarChartOutlined /> },
+  { to: '/metrics', label: '数据', icon: <BarChartOutlined /> },
 ]
 
 export default function WorkbenchLayout() {
@@ -24,8 +24,9 @@ export default function WorkbenchLayout() {
   const { user, signOut } = useAuthStore()
 
   return (
-    <div className="flex h-full overflow-hidden bg-slate-100 text-slate-900 select-none">
-      <nav className="relative z-30 w-14 shrink-0" aria-label="工作台导航">
+    <div className="flex h-full overflow-hidden bg-slate-100 text-slate-900">
+      {/* select-none 只给导航壳：整页禁选会让用户连错误信息都复制不了 */}
+      <nav className="relative z-30 w-14 shrink-0 select-none" aria-label="工作台导航">
         <div className="group absolute inset-y-0 left-0 flex w-14 flex-col overflow-hidden border-r border-slate-200 bg-white py-3.5 transition-[width,box-shadow] duration-200 hover:w-48 hover:shadow-lg">
           <div className="mb-5 flex items-center px-3">
             <Link to="/create" className="flex items-center overflow-hidden" title="Graph Canvas AI">

@@ -10,6 +10,8 @@ export interface AssetOut {
   created_at: string
   /** 预签名临时 URL：桶是私有的，前端一律用它取图 */
   url: string
+  /** 缩略图入口（服务端 307 到预签名小图）。卡片展示一律用它，看大图才用 url */
+  thumb_url?: string | null
 }
 
 /**

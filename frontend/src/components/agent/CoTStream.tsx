@@ -60,7 +60,7 @@ export default function CoTStream({
     <div className="border-line rounded-control border">
       <button
         type="button"
-        className="text-muted flex w-full items-center gap-1 px-2 py-1.5 text-[11px]"
+        className="text-muted flex w-full items-center gap-1 px-2 py-1.5 text-xs"
         onClick={() => {
           setOpen((prev) => !prev)
           setTouched(true)
@@ -73,11 +73,16 @@ export default function CoTStream({
       </button>
 
       {open && (
-        <div ref={listRef} className="max-h-44 space-y-0.5 overflow-y-auto px-2 pb-1.5">
+        // role="log"（隐含 aria-live=polite）：屏幕阅读器能跟上流式增量
+        <div
+          ref={listRef}
+          role="log"
+          className="max-h-44 space-y-0.5 overflow-y-auto px-2 pb-1.5"
+        >
           {items.map((item) => (
             <p
               key={item.seq}
-              className={`m-0 text-[11px] leading-snug whitespace-pre-wrap break-words ${KIND_CLASS[item.kind]}`}
+              className={`m-0 text-xs leading-snug whitespace-pre-wrap break-words ${KIND_CLASS[item.kind]}`}
             >
               <span className="text-faint mr-1 select-none">[{KIND_LABEL[item.kind]}]</span>
               {item.delta}

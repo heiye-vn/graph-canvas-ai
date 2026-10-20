@@ -84,8 +84,13 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="bg-slate-50 flex min-h-full flex-col justify-center px-6 py-12 select-none">
-      <div className="mx-auto w-full max-w-sm">
+    <div className="relative flex min-h-full flex-col justify-center overflow-hidden bg-slate-50 px-6 py-12">
+      {/* 顶部品牌柔光：门面页别一片素灰 */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,rgba(37,99,235,0.10),transparent_55%)]"
+      />
+      <div className="relative mx-auto w-full max-w-sm">
         <div className="mb-4">
           <Link to="/">
             <Button type="text" size="small" icon={<ArrowLeftOutlined />} className="text-slate-500 hover:text-slate-800">

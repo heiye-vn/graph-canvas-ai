@@ -33,8 +33,9 @@ export const antdTheme: ThemeConfig = {
     controlHeightSM: 26,
     controlHeightLG: 40,
 
+    // 与 index.css body 的 font-family 逐字一致（别分叉）
     fontFamily:
-      "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif",
+      "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'HarmonyOS Sans SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif",
   },
   components: {
     Button: {

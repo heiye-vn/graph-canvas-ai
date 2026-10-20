@@ -10,8 +10,12 @@ import { DeleteOutlined, EditOutlined, ExportOutlined } from '@ant-design/icons'
 export interface AssetCardAsset {
   id: string
   url: string
+  /** 缩略图（可选）：有就用它，避免卡片直接拉原图 */
+  thumb_url?: string | null
   width: number | null
   height: number | null
+  /** image / export / mask —— 决定右上角的来源徽标 */
+  kind?: string
 }
 
 export default function AssetCard({
@@ -33,11 +37,24 @@ export default function AssetCard({
       {/* 图像展示区 */}
       <div className="relative h-40 w-full overflow-hidden bg-slate-900/90">
         <img
-          src={asset.url}
+          src={asset.thumb_url ?? asset.url}
           alt=""
           className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           loading="lazy"
+          decoding="async"
         />
+
+        {/* 来源徽标：投放尺寸与遮罩是中间产物，不该和作品长得一模一样 */}
+        {asset.kind === 'export' && (
+          <span className="absolute right-2 top-2 rounded-full bg-white/90 px-2 py-0.5 text-[10px] font-medium text-slate-700 shadow-sm">
+            投放尺寸
+          </span>
+        )}
+        {asset.kind === 'mask' && (
+          <span className="absolute right-2 top-2 rounded-full bg-amber-100/95 px-2 py-0.5 text-[10px] font-medium text-amber-800 shadow-sm">
+            选区遮罩
+          </span>
+        )}
 
         {/* 悬停浮层快捷操作 */}
         <div className="absolute inset-0 bg-black/40 opacity-0 backdrop-blur-[2px] transition-opacity duration-200 group-hover:opacity-100 flex items-center justify-center gap-2">

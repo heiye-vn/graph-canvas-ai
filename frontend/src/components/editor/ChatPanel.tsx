@@ -1,14 +1,14 @@
 /**
- * 左侧对话与 Agent 多步执行面板（对齐参考项目图1标准）。
+ * 左侧对话与 Agent 多步执行面板。
  *
- * 1. 结构化流程卡片：步骤清晰、状态胶囊对齐、CoT 展开流优雅折叠
- * 2. 视觉层级明确：用户浅蓝气泡 vs 系统白底专业卡片
- * 3. 一体化多行输入盒与快捷 Prompt 药丸
+ * 1. 一轮对话 = 一条 AgentRun：用户指令气泡 + 计划卡片成对出现
+ * 2. 气泡对比：用户实心品牌蓝（右）vs 系统白底卡片（左），扫一眼就能分清谁说的
+ * 3. 长内容不截断：回复正文展开/收起，步骤说明完整换行显示
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Tag } from "antd";
+import { Button, Popover, Tag } from "antd";
 import {
   CheckCircleFilled,
   CheckOutlined,
@@ -16,6 +16,7 @@ import {
   CloseCircleFilled,
   CloseOutlined,
   FileSearchOutlined,
+  HistoryOutlined,
   LoadingOutlined,
   PlusOutlined,
   RedoOutlined,
@@ -51,6 +52,77 @@ const SUGGESTIONS = [
   "把图调亮一点并水平翻转",
 ];
 
+const RUN_STATUS_META: Record<
+  AgentRun["status"],
+  { text: string; color: string }
+> = {
+  planning: { text: "规划中", color: "processing" },
+  awaiting_confirm: { text: "待确认", color: "gold" },
+  running: { text: "执行中", color: "processing" },
+  succeeded: { text: "已完成", color: "success" },
+  failed: { text: "失败", color: "error" },
+  cancelled: { text: "已取消", color: "default" },
+};
+
+/** 回复超过这个长度就折成三行，给「展开全文」 */
+const REPLY_COLLAPSE_CHARS = 120;
+
+/**
+ * 一轮对话 = 一条 AgentRun（含 instruction 与 plan）。
+ * 恢复现场时必须把用户指令一起还原：只贴计划卡片，用户就看不到自己说过什么。
+ */
+function runsToMessages(runs: AgentRun[]): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  for (const run of runs) {
+    const instruction = run.instruction?.trim();
+    if (instruction) out.push({ role: "user", text: instruction });
+    out.push({ role: "agent", runId: run.id });
+  }
+  return out;
+}
+
+function formatWhen(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return sameDay ? hhmm : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hhmm}`;
+}
+
+/**
+ * 长文本展开/收起：短文本原样渲染（零开销），
+ * 长文本默认折成三行，点「展开全文」看完整内容。
+ */
+function ExpandableText({
+  text,
+  className,
+}: {
+  text: string;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (text.length <= REPLY_COLLAPSE_CHARS) {
+    return <p className={`m-0 whitespace-pre-wrap break-words ${className ?? ""}`}>{text}</p>;
+  }
+  return (
+    <div>
+      <p
+        className={`m-0 whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-3"} ${className ?? ""}`}
+      >
+        {text}
+      </p>
+      <button
+        type="button"
+        onClick={() => setExpanded((prev) => !prev)}
+        className="mt-1 cursor-pointer text-[11px] font-medium text-blue-600 transition-colors hover:text-blue-700"
+      >
+        {expanded ? "收起" : "展开全文"}
+      </button>
+    </div>
+  );
+}
+
 export default function ChatPanel({
   sessionId,
   onChanged,
@@ -66,6 +138,12 @@ export default function ChatPanel({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  /** 历史是否已灌入过：点过「新对话」或已恢复过就不再回灌，否则清空后又被填满 */
+  const restoredRef = useRef(false);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  /** 从「历史」跳转过来的那一轮，滚动定位并高亮 */
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
 
   // 恢复现场：这个会话的历史对话轮
   const history = useQuery({
@@ -75,24 +153,50 @@ export default function ChatPanel({
   });
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    if (restoredRef.current) return;
+    const runs = history.data ?? [];
+    if (runs.length === 0) return;
+    // 用户抢在历史返回前已经开口了：本地对话优先，历史通过「历史」面板回看
+    if (messagesRef.current.length > 0) {
+      restoredRef.current = true;
+      return;
+    }
+    restoredRef.current = true;
+    setMessages(runsToMessages(runs));
+  }, [history.data]);
+
+  // 从「历史」选中某一轮后滚动定位（卡片内容是异步载入的，落定后再校正一次）
+  useEffect(() => {
+    if (!activeRunId) return;
+    const scrollToTarget = (smooth: boolean) => {
+      const el = listRef.current?.querySelector(
+        `[data-run-id="${activeRunId}"]`,
+      );
+      if (!el) return;
+      el.scrollIntoView(
+        smooth ? { block: "center", behavior: "smooth" } : { block: "center" },
+      );
+    };
+    const first = window.setTimeout(() => scrollToTarget(true), 80);
+    const settle = window.setTimeout(() => scrollToTarget(false), 400);
+    return () => {
+      window.clearTimeout(first);
+      window.clearTimeout(settle);
+    };
+  }, [activeRunId, messages]);
+
+  useEffect(() => {
+    // 刚从历史定位过来时不要抢滚动，否则会被拽回底部
+    if (activeRunId) return;
     listRef.current?.scrollTo({
       top: listRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, history.data]);
-
-  useEffect(() => {
-    const runs = history.data ?? [];
-    if (runs.length > 0 && messages.length === 0) {
-      setMessages(
-        runs.map((run) => ({
-          role: "agent" as const,
-          runId: run.id,
-          text: run.instruction ? undefined : undefined,
-        })),
-      );
-    }
-  }, [history.data, messages.length]);
+  }, [messages, activeRunId]);
 
   const plan = useMutation({
     mutationFn: (instruction: string) => createPlan(sessionId, instruction),
@@ -113,91 +217,148 @@ export default function ChatPanel({
   function send(text: string) {
     const trimmed = text.trim();
     if (!trimmed || plan.isPending) return;
+    restoredRef.current = true;
+    setActiveRunId(null);
     setMessages((prev) => [...prev, { role: "user", text: trimmed }]);
     setInput("");
     plan.mutate(trimmed);
   }
 
+  /** 新对话：只清空当前视图，历史仍留在服务端，「历史」里可以回看 */
+  function startNewChat() {
+    restoredRef.current = true;
+    setMessages([]);
+    setInput("");
+    setActiveRunId(null);
+    setHistoryOpen(false);
+  }
+
+  /** 从历史里挑一轮：恢复完整对话流并定位到那一轮 */
+  function jumpToRun(runId: string) {
+    const runs = history.data ?? [];
+    restoredRef.current = true;
+    setMessages(runsToMessages(runs));
+    setActiveRunId(runId);
+    setHistoryOpen(false);
+  }
+
   const busy = plan.isPending;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-slate-50/60 select-none">
-      {/* 对话顶栏控制 */}
-      <div className="border-b border-slate-200 px-3 py-2 flex items-center justify-between shrink-0 bg-white">
-        <div className="flex items-center gap-1.5 bg-slate-100 p-0.5 rounded-md">
+    <div className="flex h-full min-h-0 flex-col bg-slate-50/60">
+      {/* 顶栏：标题 + 两个动作。不做胶囊分段控件 —— 那是模板，不是产品 */}
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 py-2.5">
+        <span className="text-[13px] font-semibold text-slate-700">对话</span>
+        <div className="flex items-center gap-0.5">
           <button
             type="button"
-            className="flex items-center gap-1 px-3 py-1 text-xs font-medium text-slate-800 bg-white rounded shadow-2xs"
+            onClick={startNewChat}
+            disabled={busy}
+            title="新对话"
+            className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PlusOutlined className="text-[10px]" />
             <span>新对话</span>
           </button>
-          <button
-            type="button"
-            className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-800 rounded transition-colors"
+          <Popover
+            trigger="click"
+            placement="bottomRight"
+            arrow={false}
+            open={historyOpen}
+            onOpenChange={setHistoryOpen}
+            content={
+              <HistoryList
+                runs={history.data ?? []}
+                loading={history.isLoading}
+                activeRunId={activeRunId}
+                onPick={jumpToRun}
+              />
+            }
           >
-            历史
-          </button>
+            <button
+              type="button"
+              disabled={busy}
+              title="历史对话"
+              className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-xs text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <HistoryOutlined className="text-[11px]" />
+              <span>历史</span>
+            </button>
+          </Popover>
         </div>
-        <span className="text-[11px] text-slate-400 font-mono">AI Agent</span>
       </div>
 
       {/* 消息与执行卡片流 */}
       <div
         ref={listRef}
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto p-3.5"
+        className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
       >
-        {messages.length === 0 && (
-          <div className="rounded-lg border border-dashed border-slate-200 bg-white/80 p-3.5 text-xs text-slate-500 leading-relaxed shadow-xs">
-            <p className="font-medium text-slate-700 m-0 mb-1">
-              自然语言指令编排
-            </p>
-            <p className="text-[11px] text-slate-400 m-0 mb-3">
-              支持复合修改指令，AI 将自动分析并分解为可单步确认的执行计划。
-            </p>
-            <div className="flex flex-col gap-1.5">
-              {SUGGESTIONS.map((text) => (
-                <button
-                  key={text}
-                  type="button"
-                  onClick={() => send(text)}
-                  className="text-left text-xs text-blue-600 bg-blue-50/60 hover:bg-blue-50 hover:text-blue-700 border border-blue-100/80 px-2.5 py-1.5 rounded transition-all cursor-pointer truncate"
-                >
-                  {text}
-                </button>
-              ))}
+        {messages.length === 0 &&
+          (history.isLoading ? (
+            <div className="flex items-center gap-2 p-3 text-[13px] text-slate-400">
+              <LoadingOutlined />
+              <span>对话载入中…</span>
             </div>
-          </div>
-        )}
+          ) : (
+            <div className="pt-2">
+              <p className="m-0 text-[15px] font-semibold text-slate-800">
+                想怎么改这张图？
+              </p>
+              <p className="m-0 mt-1 text-xs leading-relaxed text-slate-400">
+                用大白话说就行，支持多步指令，AI 会先列出执行计划等你确认。
+              </p>
+              <div className="mt-4 flex flex-col gap-1">
+                {SUGGESTIONS.map((text) => (
+                  <button
+                    key={text}
+                    type="button"
+                    onClick={() => send(text)}
+                    className="group flex cursor-pointer items-center justify-between rounded-lg px-3 py-2.5 text-left text-[13px] text-slate-600 transition-colors hover:bg-white hover:text-blue-600 hover:shadow-xs"
+                  >
+                    <span>{text}</span>
+                    <span className="text-slate-300 transition-all group-hover:translate-x-0.5 group-hover:text-blue-500">
+                      →
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
 
         {messages.map((message, index) =>
           message.role === "user" ? (
             <div key={index} className="flex justify-end">
-              <div className="bg-blue-50/90 border border-blue-200/80 text-blue-900 rounded-lg px-3 py-2 text-xs max-w-[90%] shadow-2xs">
+              <div className="max-w-[85%] rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2.5 text-[13px] leading-relaxed text-white shadow-sm">
                 {message.text}
               </div>
             </div>
           ) : message.runId ? (
-            <PlanCard
-              key={index}
-              runId={message.runId}
-              onQueuedRun={onQueuedRun}
-              onChanged={onChanged}
-            />
-          ) : (
             <div
               key={index}
-              className="rounded-md bg-red-50 border border-red-200 p-2 text-red-600 text-xs"
+              data-run-id={message.runId}
+              className={
+                activeRunId === message.runId
+                  ? "rounded-xl ring-1 ring-blue-300/80 transition-shadow"
+                  : "rounded-xl"
+              }
             >
+              <PlanCard
+                runId={message.runId}
+                onQueuedRun={onQueuedRun}
+                onChanged={onChanged}
+              />
+            </div>
+          ) : (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-[13px] leading-relaxed text-red-600">
               {message.text}
             </div>
           ),
         )}
       </div>
 
-      {/* 底部一体化输入区 */}
-      <div className="border-t border-slate-200 bg-white p-3 shrink-0">
-        <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-2 transition-all focus-within:border-blue-400 focus-within:bg-white focus-within:shadow-xs">
+      {/* 底部输入区 */}
+      <div className="shrink-0 border-t border-slate-200 bg-white p-3.5">
+        <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-2.5 transition-all focus-within:border-blue-400 focus-within:bg-white focus-within:shadow-xs">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -207,14 +368,14 @@ export default function ChatPanel({
                 send(input);
               }
             }}
-            placeholder="说明要怎么改，例如：去背景再水平翻转。回车发送"
+            placeholder="说明要怎么改，例如：去背景再水平翻转"
             disabled={busy}
             rows={2}
-            className="w-full resize-none border-none bg-transparent p-0 text-xs text-slate-800 placeholder-slate-400 outline-none leading-relaxed"
+            className="w-full resize-none border-none bg-transparent p-0 text-[13px] leading-relaxed text-slate-800 placeholder-slate-400 outline-none"
           />
-          <div className="mt-1.5 flex items-center justify-between pt-1 border-t border-slate-100">
-            <span className="text-[10px] text-slate-400">
-              Shift + Enter 换行
+          <div className="mt-1.5 flex items-center justify-between border-t border-slate-100 pt-2">
+            <span className="text-[11px] text-slate-400">
+              回车发送 · Shift + 回车换行
             </span>
             <Button
               type="primary"
@@ -223,7 +384,7 @@ export default function ChatPanel({
               loading={busy}
               disabled={input.trim().length === 0}
               onClick={() => send(input)}
-              className="h-6! px-2.5! text-xs! rounded!"
+              className="h-7! px-3! text-[13px]! rounded-lg!"
             >
               发送
             </Button>
@@ -234,7 +395,7 @@ export default function ChatPanel({
   );
 }
 
-/** 单条计划卡片：对齐参考图1步骤流卡片设计 */
+/** 单条计划卡片：状态头 + CoT + 回复正文 + 步骤列表 + 动作栏 */
 function PlanCard({
   runId,
   onQueuedRun,
@@ -301,11 +462,11 @@ function PlanCard({
   }, [stream.closed, watching?.run_id]);
 
   if (error && !run) {
-    return <p className="text-red-500 text-xs">{error}</p>;
+    return <p className="text-[13px] text-red-500">{error}</p>;
   }
   if (!run) {
     return (
-      <div className="flex items-center gap-2 p-3 bg-white rounded-lg border border-slate-200 text-xs text-slate-400">
+      <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white p-3.5 text-[13px] text-slate-400">
         <LoadingOutlined />
         <span>计划载入中…</span>
       </div>
@@ -330,19 +491,19 @@ function PlanCard({
   const hasFailed = run.plan.some((step) => step.status === "failed");
 
   return (
-    <div className="bg-white rounded-lg border border-slate-200 p-3 shadow-xs space-y-2 text-xs">
+    <div className="space-y-2.5 rounded-xl border border-slate-200 bg-white p-3.5 text-[13px] shadow-xs">
       {/* 头部状态 */}
-      <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-2">
         <div className="flex items-center gap-1.5">
           <StatusBadge status={run.status} />
           {run.error && (
-            <span className="text-red-500 font-medium">{run.error}</span>
+            <span className="font-medium text-red-500">{run.error}</span>
           )}
         </div>
         <button
           type="button"
           onClick={() => setTraceOpen(true)}
-          className="text-[11px] text-slate-400 hover:text-slate-600 flex items-center gap-1 cursor-pointer"
+          className="flex cursor-pointer items-center gap-1 text-xs text-slate-400 transition-colors hover:text-slate-600"
         >
           <FileSearchOutlined />
           <span>审计</span>
@@ -356,33 +517,36 @@ function PlanCard({
       />
 
       {run.reply && (
-        <p className="text-slate-600 m-0 text-xs leading-relaxed font-normal">
-          {run.reply}
-        </p>
+        <ExpandableText
+          text={run.reply}
+          className="text-[13px] leading-relaxed text-slate-600"
+        />
       )}
 
-      {/* 结构化步骤列表（对齐参考图1） */}
+      {/* 步骤列表：说明文字完整换行，不截断 */}
       {run.plan.length > 0 && (
         <div className="space-y-1.5 pt-0.5">
           {run.plan.map((step, idx) => (
             <div
               key={step.id}
-              className="flex items-center justify-between bg-slate-50/80 hover:bg-slate-50 border border-slate-100 rounded-md px-2.5 py-1.5 transition-colors"
+              className="rounded-lg border border-slate-100 bg-slate-50/80 px-3 py-2 transition-colors hover:bg-slate-50"
             >
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="font-mono text-[11px] text-slate-400 font-semibold">
-                  {idx + 1}.
-                </span>
-                <span className="font-medium text-slate-700 truncate">
-                  {step.tool}
-                </span>
-                {step.message && (
-                  <span className="text-[10px] text-slate-400 truncate max-w-30">
-                    {step.message}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="font-mono text-xs font-semibold text-slate-400">
+                    {idx + 1}.
                   </span>
-                )}
+                  <span className="truncate font-medium text-slate-700">
+                    {step.tool}
+                  </span>
+                </div>
+                <StepStatusBadge status={step.status} />
               </div>
-              <StepStatusBadge status={step.status} />
+              {step.message && (
+                <p className="m-0 mt-1 break-words pl-5 text-xs leading-relaxed text-slate-400">
+                  {step.message}
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -391,7 +555,7 @@ function PlanCard({
       {/* 动作按钮栏 */}
       {(run.status === "awaiting_confirm" ||
         (run.status === "failed" && hasFailed)) && (
-        <div className="mt-2.5 flex items-center gap-2 pt-1 border-t border-slate-100">
+        <div className="mt-2.5 flex items-center gap-2 border-t border-slate-100 pt-2.5">
           {run.status === "awaiting_confirm" && (
             <>
               <Button
@@ -400,7 +564,7 @@ function PlanCard({
                 icon={<CheckOutlined />}
                 loading={busy}
                 onClick={() => act(() => confirmPlan(run.id))}
-                className="h-6! px-2.5! text-xs!"
+                className="h-7! px-3! text-[13px]! rounded-lg!"
               >
                 开始执行
               </Button>
@@ -409,7 +573,7 @@ function PlanCard({
                 icon={<CloseOutlined />}
                 disabled={busy}
                 onClick={() => act(() => cancelPlan(run.id))}
-                className="h-6! px-2.5! text-xs!"
+                className="h-7! px-3! text-[13px]! rounded-lg!"
               >
                 取消
               </Button>
@@ -421,7 +585,7 @@ function PlanCard({
               icon={<RedoOutlined />}
               loading={busy}
               onClick={() => act(() => retryPlan(run.id))}
-              className="h-6! px-2.5! text-xs!"
+              className="h-7! px-3! text-[13px]! rounded-lg!"
             >
               重试失败步骤
             </Button>
@@ -429,7 +593,7 @@ function PlanCard({
         </div>
       )}
 
-      {error && <p className="text-red-500 m-0 text-xs">{error}</p>}
+      {error && <p className="m-0 text-[13px] text-red-500">{error}</p>}
       <TraceModal
         runId={run.id}
         open={traceOpen}
@@ -442,53 +606,109 @@ function PlanCard({
 function StepStatusBadge({ status }: { status: PlanStep["status"] }) {
   if (status === "succeeded") {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-medium shrink-0">
-        <CheckCircleFilled className="text-[9px]" />
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+        <CheckCircleFilled className="text-[10px]" />
         <span>已完成</span>
       </span>
     );
   }
   if (status === "running" || status === "queued") {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-blue-700 bg-blue-50 px-2 py-0.5 rounded-full font-medium shrink-0">
-        <SyncOutlined spin className="text-[9px]" />
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+        <SyncOutlined spin className="text-[10px]" />
         <span>执行中</span>
       </span>
     );
   }
   if (status === "failed") {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] text-red-700 bg-red-50 px-2 py-0.5 rounded-full font-medium shrink-0">
-        <CloseCircleFilled className="text-[9px]" />
+      <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
+        <CloseCircleFilled className="text-[10px]" />
         <span>失败</span>
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full font-medium shrink-0">
-      <ClockCircleOutlined className="text-[9px]" />
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-400">
+      <ClockCircleOutlined className="text-[10px]" />
       <span>等待</span>
     </span>
   );
 }
 
 function StatusBadge({ status }: { status: AgentRun["status"] }) {
-  const map: Record<AgentRun["status"], { text: string; color: string }> = {
-    planning: { text: "规划中", color: "processing" },
-    awaiting_confirm: { text: "待确认", color: "gold" },
-    running: { text: "执行中", color: "processing" },
-    succeeded: { text: "已完成", color: "success" },
-    failed: { text: "失败", color: "error" },
-    cancelled: { text: "已取消", color: "default" },
-  };
-  const item = map[status] || { text: status, color: "default" };
+  const item = RUN_STATUS_META[status] ?? { text: status, color: "default" };
   return (
     <Tag
       bordered={false}
       color={item.color}
-      className="m-0 text-[10px] leading-tight px-1.5 py-0.5"
+      className="m-0 px-2 py-0.5 text-[11px] leading-tight"
     >
       {item.text}
     </Tag>
+  );
+}
+
+/** 历史对话轮列表（「历史」按钮的下拉面板） */
+function HistoryList({
+  runs,
+  loading,
+  activeRunId,
+  onPick,
+}: {
+  runs: AgentRun[];
+  loading: boolean;
+  activeRunId: string | null;
+  onPick: (runId: string) => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex w-72 items-center gap-2 px-1 py-3 text-[13px] text-slate-400">
+        <LoadingOutlined />
+        <span>历史加载中…</span>
+      </div>
+    );
+  }
+  if (runs.length === 0) {
+    return (
+      <div className="w-72 px-1 py-3 text-[13px] text-slate-400">
+        这个会话还没有对话记录。
+      </div>
+    );
+  }
+  return (
+    <div className="w-72">
+      <div className="max-h-80 overflow-y-auto pr-0.5">
+        <p className="m-0 mb-1 px-1.5 text-xs font-medium text-slate-400">
+          本会话共 {runs.length} 轮，点击回看
+        </p>
+        <div className="flex flex-col gap-0.5">
+          {runs.map((run, index) => (
+            <button
+              key={run.id}
+              type="button"
+              onClick={() => onPick(run.id)}
+              className={`w-full cursor-pointer rounded-md px-2 py-1.5 text-left transition-colors ${
+                activeRunId === run.id ? "bg-blue-50" : "hover:bg-slate-50"
+              }`}
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="shrink-0 font-mono text-[11px] text-slate-400">
+                  #{index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-slate-700">
+                  {run.instruction?.trim() || "（未记录指令）"}
+                </span>
+              </div>
+              <div className="mt-0.5 flex items-center gap-1 pl-5 text-[11px] text-slate-400">
+                <span>{formatWhen(run.created_at)}</span>
+                <span>·</span>
+                <span>{RUN_STATUS_META[run.status]?.text ?? run.status}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }

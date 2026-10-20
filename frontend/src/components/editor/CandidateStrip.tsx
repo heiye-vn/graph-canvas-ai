@@ -26,7 +26,7 @@ export default function CandidateStrip({
   const candidates = doc.layers.filter((layer) => layer.type === 'image' && layer.source)
 
   return (
-    <div className="bg-[#121316] border-t border-[#23252a] px-4 py-2.5 flex items-center gap-3 shrink-0 select-none">
+    <div className="bg-stage border-t border-stage-border px-4 py-2.5 flex items-center gap-3 shrink-0 select-none">
       <div className="flex items-center gap-1.5 text-zinc-400 shrink-0 text-xs font-medium">
         <PictureOutlined className="text-blue-400" />
         <span className="tracking-wide">版本流水</span>
@@ -37,7 +37,7 @@ export default function CandidateStrip({
 
       <div className="h-4 w-px bg-zinc-800 shrink-0" />
 
-      <div className="flex items-center gap-2.5 overflow-x-auto py-0.5 min-w-0">
+      <div className="flex items-center gap-2.5 overflow-x-auto py-0.5 min-w-0 scrollbar-none">
         {candidates.length === 0 ? (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 text-xs">
             <span>当前画布暂无图像层</span>
