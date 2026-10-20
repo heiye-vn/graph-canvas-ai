@@ -8,7 +8,7 @@
  */
 
 import type { Adjustments } from '@/domain/layerDoc'
-import { adjustPixels, hasAdjustments } from '@/domain/pixels'
+import { adjustPixels, hasAdjustments, sharpenPixels } from '@/domain/pixels'
 
 export type DrawableSource = HTMLImageElement | HTMLCanvasElement
 
@@ -35,8 +35,17 @@ export function adjustedSource(
   try {
     ctx.drawImage(source, 0, 0)
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    // 颜色（含晕影）先算，锐化/清晰度是邻域运算必须单独一遍
+    const colored = adjustPixels(
+      imageData.data,
+      adjustments,
+      canvas.width,
+      canvas.height,
+    )
     // set() 而非替换引用：ImageData.data 是只读的那块内存
-    imageData.data.set(adjustPixels(imageData.data, adjustments))
+    imageData.data.set(
+      sharpenPixels(colored, canvas.width, canvas.height, adjustments),
+    )
     ctx.putImageData(imageData, 0, 0)
     return canvas
   } catch {

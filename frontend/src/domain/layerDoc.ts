@@ -48,8 +48,21 @@ export interface TextContent {
 export interface Adjustments {
   brightness: number
   contrast: number
-  saturation: number
+  /** 只影响亮部 */
+  highlights: number
+  /** 只影响暗部 */
+  shadows: number
   temperature: number
+  /** 正品红、负绿 */
+  tint: number
+  saturation: number
+  /** 自然饱和度：本来就是灰的像素多改一点 */
+  vibrance: number
+  sharpness: number
+  /** 更大半径的局部对比 */
+  clarity: number
+  /** 0~100，只加暗 */
+  vignette: number
 }
 
 export interface Layer {

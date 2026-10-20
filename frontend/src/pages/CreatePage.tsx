@@ -386,7 +386,7 @@ export default function CreatePage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8 select-none">
+    <div className="mx-auto max-w-4xl px-6 py-8">
       {/* 极简大标题 */}
       <h1 className="text-2xl font-bold tracking-tight text-slate-900 mb-6 m-0">
         创作

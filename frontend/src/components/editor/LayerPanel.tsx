@@ -1,11 +1,11 @@
 /**
- * 图层面板 —— 专业级卡片式图层堆栈（对齐参考图1标准）。
+ * 图层面板 —— 图层堆栈 + 拆层选项（对齐参考项目的图层检查器）。
  *
- * 1. 顶部提供拆层/成层与文字关联快捷开关
- * 2. 图层卡片化：包含类型预览、名称、锁定/激活徽章、不透明度、眼睛开关
+ * 这里只保留**真的会生效**的选项：拆层在顶栏，勾上「同时拆出文字」后
+ * 顶栏那一下就会带上 include_text。成层（合并图层）后端还没有对应工具，
+ * 所以不摆那个按钮 —— 点了没反应的开关比没有更糟。
  */
 
-import { useState } from 'react'
 import { Button, Checkbox, Tooltip } from 'antd'
 import {
   BorderOutlined,
@@ -34,6 +34,8 @@ export default function LayerPanel({
   onSwitchCurrent,
   onEditText,
   busy = false,
+  splitIncludeText = false,
+  onSplitIncludeTextChange,
 }: {
   doc: LayerDocument
   selectedId?: string | null
@@ -42,45 +44,24 @@ export default function LayerPanel({
   onSwitchCurrent: (layerId: string) => void
   onEditText?: (layerId: string) => void
   busy?: boolean
+  /** 顶栏「拆层」是否同时拆出文字层 */
+  splitIncludeText?: boolean
+  onSplitIncludeTextChange?: (next: boolean) => void
 }) {
-  const [splitMode, setSplitMode] = useState<string>('split')
-  const [extractText, setExtractText] = useState(false)
   const layers = topDown(doc)
 
   return (
     <div className="space-y-2.5 select-none">
-      {/* 顶部操作区（对齐参考图1） */}
-      <div className="space-y-1.5 pb-1 border-b border-slate-100">
-        <div className="flex items-center justify-between text-xs text-slate-500">
-          <Checkbox
-            checked={extractText}
-            onChange={(e) => setExtractText(e.target.checked)}
-            className="text-[11px] text-slate-600"
-          >
-            同时拆出文字
-          </Checkbox>
-        </div>
-
-        <div className="grid grid-cols-2 gap-1 bg-slate-100 p-0.5 rounded-md">
-          <button
-            type="button"
-            onClick={() => setSplitMode('split')}
-            className={`py-1 text-xs font-medium rounded transition-all cursor-pointer ${
-              splitMode === 'split' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            拆层
-          </button>
-          <button
-            type="button"
-            onClick={() => setSplitMode('merge')}
-            className={`py-1 text-xs font-medium rounded transition-all cursor-pointer ${
-              splitMode === 'merge' ? 'bg-white text-slate-800 shadow-2xs' : 'text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            成层
-          </button>
-        </div>
+      {/* 拆层选项：勾选后顶栏那一下会带上 include_text */}
+      <div className="flex items-center justify-between border-b border-slate-100 pb-1.5">
+        <span className="text-[11px] text-slate-400">拆层选项</span>
+        <Checkbox
+          checked={splitIncludeText}
+          onChange={(event) => onSplitIncludeTextChange?.(event.target.checked)}
+          className="text-[11px] text-slate-600"
+        >
+          同时拆出文字
+        </Checkbox>
       </div>
 
       {/* 图层列表卡片 */}
@@ -88,10 +69,9 @@ export default function LayerPanel({
         <p className="text-slate-400 m-0 text-xs py-2 text-center">暂无图层</p>
       ) : (
         <div className="space-y-1">
-          {layers.map((layer, index) => {
+          {layers.map((layer) => {
             const active = layer.id === doc.active_layer_id
             const selected = layer.id === selectedId
-            const isBase = index === layers.length - 1
 
             return (
               <div
@@ -127,8 +107,8 @@ export default function LayerPanel({
                     >
                       {layer.name}
                     </span>
-                    {isBase && (
-                      <span className="text-[9px] text-slate-400 font-mono">已锁定</span>
+                    {layer.locked && (
+                      <span className="font-mono text-[9px] text-slate-400">已锁定</span>
                     )}
                   </div>
                   {layer.crop && (

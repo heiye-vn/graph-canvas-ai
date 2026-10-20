@@ -18,6 +18,7 @@ import {
 } from '@ant-design/icons'
 
 import { deleteSession, listSessions, renameSession, type SessionSummary } from '@/api/sessions'
+import EmptyIllustration from '@/components/EmptyIllustration'
 import PageHeader from '@/components/PageHeader'
 
 export default function EditorIndexPage() {
@@ -107,7 +108,7 @@ export default function EditorIndexPage() {
         (data.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200/80 p-12 text-center shadow-2xs">
             <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
+              image={<EmptyIllustration className="mx-auto h-20" />}
               description="暂无编辑会话。您可以去创作新图，或在素材库挑选图片进入编辑工作台。"
             >
               <div className="flex justify-center gap-3 mt-4">

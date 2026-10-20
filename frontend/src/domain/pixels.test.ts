@@ -9,7 +9,12 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { adjustPixels, hasAdjustments, NEUTRAL_ADJUSTMENTS } from '@/domain/pixels'
+import {
+  adjustPixels,
+  hasAdjustments,
+  NEUTRAL_ADJUSTMENTS,
+  sharpenPixels,
+} from '@/domain/pixels'
 import type { Adjustments } from '@/domain/layerDoc'
 
 const adj = (patch: Partial<Adjustments> = {}): Adjustments => ({
@@ -137,5 +142,129 @@ describe('hasAdjustments', () => {
 
   it('缺省时按「没调整」处理（老文档里没有这个字段）', () => {
     expect(hasAdjustments(undefined)).toBe(false)
+  })
+})
+
+describe('新增调色参数', () => {
+  /** 两个像素：亮部 / 暗部 */
+  function tones() {
+    return new Uint8ClampedArray([
+      220, 220, 220, 255,
+      30, 30, 30, 255,
+    ])
+  }
+
+  it('高光只抬亮部，暗部基本不动', () => {
+    const out = adjustPixels(tones(), adj({ highlights: 60 }))
+    expect(out[0]).toBeGreaterThan(220)
+    // 暗部 luma 低，分到的高光量很小（< 8 而不是完全为 0）
+    expect(Math.abs(out[4] - 30)).toBeLessThan(8)
+    expect(out[0] - 220).toBeGreaterThan(out[4] - 30)
+  })
+
+  it('阴影只抬暗部，亮部基本不动', () => {
+    const out = adjustPixels(tones(), adj({ shadows: 60 }))
+    expect(out[4]).toBeGreaterThan(30)
+    expect(Math.abs(out[0] - 220)).toBeLessThan(8)
+    expect(out[4] - 30).toBeGreaterThan(out[0] - 220)
+  })
+
+  it('色调：正值为品红（绿降、红蓝升），负值为绿', () => {
+    const pink = adjustPixels(tones(), adj({ tint: 60 }))
+    expect(pink[1]).toBeLessThan(220) // 绿降
+    expect(pink[0]).toBeGreaterThan(220) // 红升
+
+    const green = adjustPixels(tones(), adj({ tint: -60 }))
+    expect(green[0]).toBeLessThan(220) // 红降
+    expect(green[1]).toBeGreaterThan(30) // 绿升
+  })
+
+  it('自然饱和度：低饱和像素的**相对**增益大于高饱和像素', () => {
+    // 左：低饱和 (150,130,120)；右：高饱和 (220,40,40)
+    const input = new Uint8ClampedArray([
+      150, 130, 120, 255,
+      220, 40, 40, 255,
+    ])
+    const before = adjustPixels(input, adj())
+    const after = adjustPixels(input, adj({ vibrance: 80 }))
+    const delta = (out: Uint8ClampedArray, offset: number) =>
+      Math.abs(out[offset] - before[offset]) +
+      Math.abs(out[offset + 1] - before[offset + 1]) +
+      Math.abs(out[offset + 2] - before[offset + 2])
+    const chroma = (offset: number) => {
+      const average =
+        (before[offset] + before[offset + 1] + before[offset + 2]) / 3
+      return (
+        (Math.abs(before[offset] - average) +
+          Math.abs(before[offset + 1] - average) +
+          Math.abs(before[offset + 2] - average)) /
+        3
+      )
+    }
+    // 绝对变化量反而可能是高饱和像素更大（差值大），
+    // 「少改」说的是相对自身色度的比例
+    expect(delta(after, 0) / chroma(0)).toBeGreaterThan(
+      delta(after, 4) / chroma(4),
+    )
+  })
+
+  it('晕影：四角变暗、中心不变', () => {
+    const size = 8
+    const data = new Uint8ClampedArray(size * size * 4)
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 200
+      data[i + 1] = 200
+      data[i + 2] = 200
+      data[i + 3] = 255
+    }
+    const out = adjustPixels(data, adj({ vignette: 80 }), size, size)
+    const at = (x: number, y: number) => out[(y * size + x) * 4]
+    // 8px 图没有「正中心」像素，最近的四格仍有极轻微压暗
+    expect(at(4, 4)).toBeGreaterThan(190)
+    expect(at(0, 0)).toBeLessThan(at(4, 4)) // 左上角明显变暗
+    expect(at(7, 7)).toBeLessThan(at(4, 4))
+  })
+
+  it('不传尺寸时跳过晕影（单测不需要构造坐标系）', () => {
+    const data = new Uint8ClampedArray([200, 200, 200, 255])
+    expect(Array.from(adjustPixels(data, adj({ vignette: 100 })))).toEqual([
+      200, 200, 200, 255,
+    ])
+  })
+})
+
+describe('sharpenPixels', () => {
+  /** 3x3：中心亮、周围暗，锐化应把中心推得更亮 */
+  function edge() {
+    const size = 3
+    const data = new Uint8ClampedArray(size * size * 4)
+    for (let i = 0; i < data.length; i += 4) {
+      const pixel = i / 4
+      const center = pixel === 4
+      const value = center ? 200 : 100
+      data[i] = value
+      data[i + 1] = value
+      data[i + 2] = value
+      data[i + 3] = 255
+    }
+    return data
+  }
+
+  it('中性参数原样返回', () => {
+    const input = edge()
+    expect(sharpenPixels(input, 3, 3, adj())).toBe(input)
+  })
+
+  it('锐化增强边缘对比，且不动 alpha', () => {
+    const out = sharpenPixels(edge(), 3, 3, adj({ sharpness: 100 }))
+    expect(out[4 * 4]).toBeGreaterThan(200) // 中心更亮
+    expect(out[0]).toBeLessThan(100) // 角落更暗
+    expect([out[3], out[7], out[11], out[15], out[19], out[23], out[27], out[31], out[35]])
+      .toEqual([255, 255, 255, 255, 255, 255, 255, 255, 255])
+  })
+
+  it('清晰度同样生效（更大半径）', () => {
+    const out = sharpenPixels(edge(), 3, 3, adj({ clarity: 100 }))
+    expect(out[4 * 4]).toBeGreaterThan(200)
   })
 })

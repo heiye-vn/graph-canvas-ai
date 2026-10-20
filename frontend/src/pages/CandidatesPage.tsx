@@ -89,7 +89,7 @@ export default function CandidatesPage() {
   const total = finished.length + live.length
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8 select-none">
+    <div className="mx-auto max-w-4xl px-6 py-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-200">
         <div>
           <div className="flex items-center gap-2">

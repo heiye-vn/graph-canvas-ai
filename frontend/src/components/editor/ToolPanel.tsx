@@ -4,13 +4,51 @@
  * 当顶栏或外部选中工具时自适应展示表单，未选中时保持克制，避免破坏工作台的信息层级。
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Input, InputNumber, Select, Switch, Tooltip } from 'antd'
 import { CloseOutlined, LockOutlined, ThunderboltOutlined, ToolOutlined } from '@ant-design/icons'
 
 import { invokeTool, listTools } from '@/api/tools'
 import type { ToolParamMeta } from '@/api/tools'
+
+/**
+ * 不在这里出现的手势工具与顶栏重复项。
+ *
+ * 两类都过滤掉：
+ *   1. 画布手势的落点（move/resize/rotate/transform）—— 拖一下就有了
+ *   2. 顶栏已经有按钮的（裁剪/翻转/调色/拆层/去背景/换背景/扩图/超分/局部编辑）
+ *      —— 同一个动作两个入口，用户只会怀疑哪个才算数
+ *
+ * 剩下的才是「顶栏未覆盖」的补充能力：加文字 / 改文字 / 画布背景 / 删图层 / 改名。
+ */
+const HIDDEN_IN_ADVANCED = new Set([
+  // 画布手势
+  'move_layer',
+  'resize_layer',
+  'rotate_layer',
+  'transform_layer',
+  // 顶栏已有
+  'crop_layer',
+  'crop_canvas',
+  'flip_layer',
+  'adjust_color',
+  'split_layers',
+  'remove_background',
+  'replace_background',
+  'expand_canvas',
+  'upscale_image',
+  'erase_region',
+  'replace_region',
+  // 右栏/候选条已有入口
+  'set_opacity',
+  'set_layer_visible',
+  'reorder_layer',
+  'reset_crop',
+  'switch_current_image',
+  // asset_id 由界面注入，这个表单填不出来
+  'add_image_layer',
+])
 
 export default function ToolPanel({
   sessionId,
@@ -41,6 +79,15 @@ export default function ToolPanel({
     [tool],
   )
 
+  /** 下拉里只出现「顶栏没有入口」的工具，见文件头注释。 */
+  const selectableTools = useMemo(
+    () =>
+      (data?.items ?? []).filter(
+        (item) => !HIDDEN_IN_ADVANCED.has(item.name),
+      ),
+    [data],
+  )
+
   const invoke = useMutation({
     mutationFn: () => invokeTool(tool!.name, sessionId, values),
     onSuccess: (result) => {
@@ -50,6 +97,20 @@ export default function ToolPanel({
     },
   })
 
+  /**
+   * 换工具 = 换表单：上一个工具填过的参数、执行结果、错误提示一律不能带过来。
+   *
+   * 这个面板是常驻组件（只有 selected 变化，不会重挂载），而 useMutation 的
+   * data / error 挂在实例上 —— 不主动 reset 的话，「找不到图层」这类红字会一直
+   * 挂在新工具的表单底下，看起来像新工具也报错了。
+   */
+  useEffect(() => {
+    invoke.reset()
+    setValues({})
+    // invoke 由 useMutation 返回、引用稳定，不必进依赖
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tool?.name])
+
   if (isLoading) return null
   if (!data || data.items.length === 0) return null
 
@@ -58,7 +119,7 @@ export default function ToolPanel({
       <div className="rounded-md border border-slate-200/80 bg-slate-50/50 p-2 text-xs text-slate-500 flex items-center justify-between">
         <span className="flex items-center gap-1.5 text-slate-500">
           <ToolOutlined />
-          <span>更多高级工具</span>
+          <span>高级工具</span>
         </span>
         <Select<string>
           size="small"
@@ -67,10 +128,9 @@ export default function ToolPanel({
           value={undefined}
           onChange={(value: string) => {
             setLocalName(value)
-            setValues({})
             onSelect?.(value)
           }}
-          options={data.items.map((item) => ({
+          options={selectableTools.map((item) => ({
             value: item.name,
             label: item.label,
           }))}

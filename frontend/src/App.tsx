@@ -10,7 +10,6 @@ import CreatePage from '@/pages/CreatePage'
 import EditorIndexPage from '@/pages/EditorIndexPage'
 import LandingPage from '@/pages/LandingPage'
 import LoginPage from '@/pages/LoginPage'
-import MetricsPage from '@/pages/MetricsPage'
 import { useAuthStore } from '@/stores/authStore'
 
 /**
@@ -18,6 +17,9 @@ import { useAuthStore } from '@/stores/authStore'
  * 静态 import 会让每个访客都为一张还没打开的画布付带宽。
  */
 const EditorPage = lazy(() => import('@/pages/EditorPage'))
+const ExportPage = lazy(() => import('@/pages/ExportPage'))
+// 图表库（echarts 按需引入也有 ~400KB）：只有打开指标页的人需要付这份带宽
+const MetricsPage = lazy(() => import('@/pages/MetricsPage'))
 
 function EditorFallback() {
   return (
@@ -47,7 +49,14 @@ export default function App() {
             <Route path="/assets" element={<AssetsPage />} />
             <Route path="/create" element={<CreatePage />} />
             <Route path="/candidates/:runId" element={<CandidatesPage />} />
-            <Route path="/metrics" element={<MetricsPage />} />
+            <Route
+              path="/metrics"
+              element={
+                <Suspense fallback={<EditorFallback />}>
+                  <MetricsPage />
+                </Suspense>
+              }
+            />
             {/* session id 必须进 URL：刷新/分享都要能回到同一个画布 */}
             <Route path="/editor" element={<EditorIndexPage />} />
             <Route
@@ -55,6 +64,15 @@ export default function App() {
               element={
                 <Suspense fallback={<EditorFallback />}>
                   <EditorPage />
+                </Suspense>
+              }
+            />
+            {/* 导出物料：投放尺寸 / 打包下载，独立页面（不打乱编辑器布局） */}
+            <Route
+              path="/editor/:sessionId/export"
+              element={
+                <Suspense fallback={<EditorFallback />}>
+                  <ExportPage />
                 </Suspense>
               }
             />
