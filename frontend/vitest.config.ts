@@ -8,6 +8,7 @@ import { defineConfig } from 'vitest/config'
  * 也不需要 jsdom（组件级的验证留给 e2e，配一套 DOM 环境换来的覆盖率不值）。
  */
 export default defineConfig({
+  envDir: false,
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
