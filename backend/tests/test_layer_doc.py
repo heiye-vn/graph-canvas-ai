@@ -16,6 +16,8 @@ from pydantic import ValidationError
 from app.schemas.layer_doc import Adjustments, Canvas, Layer, LayerDocument, Transform
 from app.services import layer_doc as svc
 
+pytestmark = pytest.mark.unit
+
 
 def image_layer(name: str = "图像层", visible: bool = True) -> Layer:
     return Layer(name=name, type="image", visible=visible, source={"asset_id": uuid.uuid4()})

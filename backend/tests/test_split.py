@@ -23,6 +23,8 @@ from app.edits.split import (
 from app.schemas.layer_doc import LayerDocument
 from app.services.split import build_split_document
 
+pytestmark = pytest.mark.unit
+
 SIZE = (64, 48)
 
 

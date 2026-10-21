@@ -21,6 +21,8 @@ from app.edits.mask import (
 from app.edits.render import flatten
 from app.schemas.layer_doc import Adjustments, LayerDocument
 
+pytestmark = pytest.mark.unit
+
 SIZE = (64, 48)
 
 

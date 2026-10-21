@@ -7,6 +7,8 @@ from pydantic import ValidationError
 
 from app.config import Settings
 
+pytestmark = pytest.mark.unit
+
 # 必填项的最小可用组合（禁用 env_file，避免被本地 .env 影响）
 _REQUIRED = {
     "database_url": "postgresql+asyncpg://user:pwd@127.0.0.1:5432/db",
