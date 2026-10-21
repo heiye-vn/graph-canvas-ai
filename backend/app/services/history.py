@@ -32,7 +32,8 @@ from pydantic import BaseModel
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import EditHistory, EditSession
+from app.agent import plan as plan_mod
+from app.models import AgentRun, EditHistory, EditSession
 from app.models.history import HISTORY_LIMIT
 from app.schemas.layer_doc import LayerDocument
 from app.services import sessions as sessions_service
@@ -73,6 +74,32 @@ class ToolCall:
 
 
 # ------------------------------------------------------------------ 写入
+
+
+async def _link_queued_step(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """把排队任务写进父计划，且必须随**本事务**一起提交。
+
+    图执行时会把 (轮次, 步骤) 放进 session.info["agent_step"]。投递 ARQ 之前
+    若不关联 run_id，父轮次就永远看不到这个子任务：取消时 plan 里没有 run_id，
+    子任务漏掉、worker 照旧跑完并改画布。
+    """
+    # 非图调用的会话（直接 API 调工具）没有 agent_step，跳过即可
+    agent_step = (getattr(session, "info", None) or {}).get("agent_step")
+    if not agent_step:
+        return
+    turn_id, step_id = agent_step
+    turn = await session.get(AgentRun, turn_id, populate_existing=True)
+    if turn is None or turn.is_terminal:
+        return
+    plan = [dict(item) for item in (turn.plan or [])]
+    target = next((item for item in plan if item.get("id") == step_id), None)
+    # 已有 run_id 说明这一步早就投递过（重复调用），不要覆盖成新任务
+    if target is None or target.get("run_id"):
+        return
+    target["run_id"] = str(run_id)
+    target["status"] = plan_mod.QUEUED
+    # plan 是 JSONB 列：必须整体重新赋值，原地改 dict 不会被识别成脏数据
+    turn.plan = plan
 
 
 async def apply_tool_calls(
@@ -135,6 +162,7 @@ async def apply_tool_calls(
                     run_id=result.run_id,
                 )
             )
+            await _link_queued_step(session, result.run_id)
             queued.append((result.task, result))
             continue
 
