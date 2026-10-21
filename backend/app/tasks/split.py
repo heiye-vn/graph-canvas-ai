@@ -57,6 +57,7 @@ async def split_layers(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
 
+            expected_revision = record.revision
             source = await flatten_service.flatten_session(session, record)
 
             await runs_service.report(run, progress=35, stage="分离主体")
@@ -108,12 +109,15 @@ async def split_layers(ctx, run_id: str) -> None:
             label = "已拆层：背景 / 主体" + (f" / 文字 ×{len(texts)}" if texts else "")
             # 文档与历史同一事务（与 apply_tool_calls 同一不变量）——
             # 拆层替换的是整份文档，撤销栈里必须找得到这一步
+            if not await runs_service.lock_active(session, run):
+                return
             await history_service.record_external(
                 session,
                 record,
                 tool="split_layers",
                 label=label,
                 after=next_doc,
+                expected_revision=expected_revision,
                 params={"include_text": bool(params.get("include_text"))},
             )
             await selections.clear(record.id)
@@ -125,6 +129,10 @@ async def split_layers(ctx, run_id: str) -> None:
                     "document": next_doc.model_dump(mode="json"),
                     "text_count": len(texts),
                 },
+            )
+        except history_service.RevisionConflict as exc:
+            await runs_service.fail(
+                run, code="revision_conflict", message=str(exc), recoverable=True
             )
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)

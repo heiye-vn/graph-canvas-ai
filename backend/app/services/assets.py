@@ -13,11 +13,11 @@ import uuid
 
 from fastapi import HTTPException, status
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
-from app.models import Asset
+from app.models import Asset, EditHistory, EditSession, SessionAsset
 from app.schemas.asset import AssetOut, ConfirmUploadRequest, UploadTicket, UploadTicketRequest
 from app.services import storage
 
@@ -227,6 +227,28 @@ async def get_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid.UU
 
 async def delete_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid.UUID) -> None:
     asset = await get_asset(session, user_id, asset_id)
+    linked = await session.scalar(
+        select(SessionAsset.id).where(SessionAsset.asset_id == asset_id).limit(1)
+    )
+    if linked is None:
+        # 手动替换文档可能没有关联行；历史的 before / after（包括 redo 分支）也必须保留。
+        snapshots = await session.execute(
+            union_all(
+                select(EditSession.doc), select(EditHistory.before), select(EditHistory.after)
+            )
+        )
+        referenced = any(
+            str((layer.get("source") or {}).get("asset_id")) == str(asset_id)
+            for doc in snapshots.scalars()
+            for layer in doc.get("layers", [])
+        )
+    else:
+        referenced = True
+    if referenced:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="素材仍被编辑会话或历史记录引用，无法删除",
+        )
     await session.delete(asset)
     await session.commit()
     try:

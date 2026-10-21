@@ -14,19 +14,22 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import time
 import uuid
 from typing import Any
+from weakref import WeakValueDictionary
 
 from fastapi import HTTPException, status
 from langgraph.types import Command
-from sqlalchemy import select
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import plan as plan_mod
 from app.agent.checkpointer import get_checkpointer
 from app.agent.graph import CONFIRM, build_graph
+from app.db import get_engine
 from app.models import AgentRun, ToolRun
 from app.models.agent_run import (
     AWAITING_CONFIRM,
@@ -41,6 +44,13 @@ from app.services import runs as runs_service
 from app.services import traces as traces_service
 
 logger = logging.getLogger("graph-canvas-ai.agent")
+
+# 本地锁减少同进程争用；真正的轮级互斥由数据库事务 advisory lock 提供。
+_drive_locks: WeakValueDictionary[uuid.UUID, asyncio.Lock] = WeakValueDictionary()
+
+
+def _drive_lock(run_id: uuid.UUID) -> asyncio.Lock:
+    return _drive_locks.setdefault(run_id, asyncio.Lock())
 
 
 async def draft(
@@ -73,7 +83,7 @@ async def draft(
 
 
 async def confirm(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
-    turn = await _get(session, user_id, run_id)
+    turn = await _get(session, user_id, run_id, lock=True)
     if turn.status != AWAITING_CONFIRM:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="这轮计划不在等待确认的状态")
     turn.status = RUNNING
@@ -85,7 +95,7 @@ async def confirm(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUI
 
 
 async def cancel(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
-    turn = await _get(session, user_id, run_id)
+    turn = await _get(session, user_id, run_id, lock=True)
     if turn.is_terminal:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="这轮计划已经结束，无需取消")
 
@@ -94,14 +104,13 @@ async def cancel(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID
     for step in steps:
         if step["status"] == plan_mod.CANCELED and step.get("run_id"):
             tool_run = await session.get(ToolRun, uuid.UUID(step["run_id"]))
-            if tool_run is not None and tool_run.status == "queued":
+            if tool_run is not None and not tool_run.is_terminal:
                 await runs_service.cancel(tool_run)
     turn.plan = steps
-    turn.status = plan_mod.settle(steps) or CANCELLED
-    if turn.status not in TERMINAL:
-        turn.status = CANCELLED
+    turn.status = CANCELLED
     await session.commit()
     await session.refresh(turn)
+    await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
     return turn
 
 
@@ -111,11 +120,11 @@ async def retry_step(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.
     反思重规划（reflect）是图内的**自动**行为；这个端点是**人工**重试 ——
     自动重试到上限（MAX_REPLANS）降级为 failed 后，就轮到它接手。
     """
-    turn = await _get(session, user_id, run_id)
+    turn = await _get(session, user_id, run_id, lock=True)
     failed = next(
         (step for step in reversed(turn.plan) if step["status"] == plan_mod.FAILED), None
     )
-    if failed is None:
+    if turn.status != "failed" or failed is None:
         raise HTTPException(status.HTTP_409_CONFLICT, detail="没有可重试的失败步骤")
     failed["run_id"] = None
     failed["message"] = None
@@ -143,12 +152,21 @@ async def continue_after_tool_run(
 ) -> AgentRun:
     """某个排队步的 ToolRun 结束了：resume 图，observe 节点核对终态后继续推进。"""
     turn = await _get(session, user_id, run_id)
+    if turn.is_terminal:
+        return turn
     tool_run = await runs_service.get_run(session, user_id, tool_run_id)
     if not any(step.get("run_id") == str(tool_run.id) for step in turn.plan):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, detail="这个任务不属于该计划"
         )
 
+    if not tool_run.is_terminal:
+        raise HTTPException(status.HTTP_409_CONFLICT, detail="后台任务尚未结束")
+    if not any(
+        step.get("run_id") == str(tool_run.id) and step["status"] == plan_mod.QUEUED
+        for step in turn.plan
+    ):
+        return turn
     await _drive(run_id, resume={"action": "tool_done", "run_id": str(tool_run.id)})
     await session.refresh(turn)
     return turn
@@ -163,6 +181,28 @@ async def _drive(
     resume: dict[str, Any] | None = None,
     input_state: dict[str, Any] | None = None,
 ) -> None:
+    async with _drive_lock(run_id):
+        # 专用连接上的事务锁跨越图内各事务，异常/连接断开自动释放，无租约过期窗口。
+        # 不锁 AgentRun 行：取消仍能独立提交；锁失败时绝不读取 checkpoint 或执行工具。
+        key = int.from_bytes(
+            hashlib.blake2b(f"agent-drive:{run_id}".encode(), digest_size=8).digest(),
+            "big", signed=True,
+        )
+        async with get_engine().connect() as connection, connection.begin():
+            acquired = await connection.scalar(
+                text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": key},
+            )
+            if not acquired:
+                return
+            await _drive_once(run_id, resume=resume, input_state=input_state)
+
+
+async def _drive_once(
+    run_id: uuid.UUID,
+    *,
+    resume: dict[str, Any] | None = None,
+    input_state: dict[str, Any] | None = None,
+) -> None:
     """驱动一次图执行（新起 / resume / 带输入重启），plan 增量实时落回 agent_runs。
 
     astream(stream_mode="updates") 逐节点产出增量：plan 一变就落库 ——
@@ -171,6 +211,11 @@ async def _drive(
     async with runs_service.session_scope() as session:
         turn = await session.get(AgentRun, run_id)
         if turn is None or turn.status in TERMINAL:
+            return
+        if resume and resume.get("action") == "tool_done" and not any(
+            step.get("run_id") == resume.get("run_id")
+            and step["status"] == plan_mod.QUEUED for step in turn.plan
+        ):
             return
         started = time.monotonic()
         interrupted_kind: str | None = None
@@ -222,33 +267,36 @@ async def _drive(
                         continue
                     state_acc.update(delta)
                     if isinstance(delta.get("plan"), list):
-                        turn.plan = delta["plan"]
-                        turn.status = RUNNING
-                        await session.commit()
+                        if not await _persist_active(
+                            session, turn, plan=delta["plan"], status=RUNNING,
+                        ):
+                            return
         except Exception as exc:  # noqa: BLE001 - 图内任何异常都转成失败轮，绝不把占位挂死
             logger.exception("图执行异常 run_id=%s", run_id)
-            turn.status = "failed"
-            turn.error = str(exc) or "执行失败，可重试或取消"
-            await session.commit()
+            await session.rollback()
+            await session.refresh(turn)
+            if not await _persist_active(
+                session, turn, status="failed", error=str(exc) or "执行失败，可重试或取消",
+            ):
+                return
             await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
             return
 
         final_plan = state_acc.get("plan", list(turn.plan or []))
+        final_values: dict[str, Any] = {"plan": final_plan}
         if interrupted_kind == CONFIRM:
-            turn.status = AWAITING_CONFIRM
-            turn.reply = turn.reply or "将按以下步骤执行，确认后开始。"
+            final_values["status"] = AWAITING_CONFIRM
+            final_values["reply"] = turn.reply or "将按以下步骤执行，确认后开始。"
         elif interrupted_kind is not None:
-            turn.status = RUNNING  # wait_run：排队步在飞，不算结束
+            final_values["status"] = RUNNING  # wait_run：排队步在飞，不算结束
         else:
-            turn.status = plan_mod.settle(final_plan)
-            # 规划被六道关卡拦下（空计划 + errors）：必须落到 failed，
-            # settle 对空计划只能给 succeeded —— 人话在 errors 里
+            final_values["status"] = plan_mod.settle(final_plan)
             if not final_plan and state_acc.get("errors"):
-                turn.status = "failed"
-            if turn.status == "failed":
-                turn.error = _last_error(state_acc) or "执行失败，可重试或取消"
-        turn.plan = final_plan
-        await session.commit()
+                final_values["status"] = "failed"
+            if final_values["status"] == "failed":
+                final_values["error"] = _last_error(state_acc) or "执行失败，可重试或取消"
+        if not await _persist_active(session, turn, **final_values):
+            return
 
         # 轮级 span：整轮状态 / 重规划次数（M9.3 trace）
         await traces_service.record_detached(
@@ -268,22 +316,55 @@ async def _drive(
         await events.publish(DoneEvent(run_id=turn.id, status=turn.status))
 
 
+async def _persist_active(session: AsyncSession, turn: AgentRun, **values: Any) -> bool:
+    """增量与最终写回均不允许覆盖已提交的取消/其他终态。"""
+    with session.no_autoflush:
+        result = await session.execute(
+            update(AgentRun)
+            .where(AgentRun.id == turn.id, AgentRun.status.not_in(TERMINAL))
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+    await session.commit()
+    await session.refresh(turn)
+    return result.rowcount == 1
+
+
 def _last_error(state_acc: dict[str, Any]) -> str | None:
     errors = state_acc.get("errors") or []
     return str(errors[-1]) if errors else None
 
 
-async def _get(session: AsyncSession, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
-    turn = await session.scalar(
-        select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
-    )
+async def _get(
+    session: AsyncSession, user_id: uuid.UUID, run_id: uuid.UUID, *, lock: bool = False,
+) -> AgentRun:
+    stmt = select(AgentRun).where(AgentRun.id == run_id, AgentRun.user_id == user_id)
+    if lock:
+        stmt = stmt.with_for_update().execution_options(populate_existing=True)
+    turn = await session.scalar(stmt)
     if turn is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="对话轮不存在")
     return turn
 
 
+async def _recover_waiting(session: AsyncSession, turn: AgentRun) -> None:
+    """刷新/轮询时补偿丢失的前端 continue；只恢复已投递且确实终态的步骤。"""
+    if turn.status != RUNNING or _drive_lock(turn.id).locked():
+        return
+    for step in turn.plan or []:
+        if step["status"] != plan_mod.QUEUED or not step.get("run_id"):
+            continue
+        tool_run = await runs_service.get_run(session, turn.user_id, uuid.UUID(step["run_id"]))
+        if tool_run.is_terminal:
+            await _drive(turn.id, resume={"action": "tool_done", "run_id": str(tool_run.id)})
+            await session.refresh(turn)
+            return
+
+
 async def get(session: AsyncSession, *, user_id: uuid.UUID, run_id: uuid.UUID) -> AgentRun:
-    return await _get(session, user_id, run_id)
+    turn = await _get(session, user_id, run_id)
+    await _recover_waiting(session, turn)
+    return turn
 
 
 async def list_for_session(
@@ -295,4 +376,7 @@ async def list_for_session(
         .order_by(AgentRun.created_at.desc())
         .limit(limit)
     )
-    return list(reversed(result.all()))
+    turns = list(reversed(result.all()))
+    for turn in turns:
+        await _recover_waiting(session, turn)
+    return turns

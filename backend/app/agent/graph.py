@@ -32,6 +32,7 @@ from app.agent import llm as llm_module
 from app.agent import plan as plan_mod
 from app.agent.plan import PlanError
 from app.agent.prompts import PROMPT_VERSION
+from app.models import AgentRun
 from app.services import cot as cot_service
 from app.services import history as history_service
 from app.services import runs as runs_service
@@ -151,12 +152,22 @@ async def execute_node(state: GraphState) -> dict[str, Any]:
     await emit("observation", f"开始执行第 {step['id']} 步：{step['tool']}")
 
     async with runs_service.session_scope() as session:
-        _, results = await history_service.apply_tool_calls(
-            session,
-            user_id=uuid.UUID(state["user_id"]),
-            session_id=uuid.UUID(state["session_id"]),
-            calls=[history_service.ToolCall(name=step["tool"], params=step["params"])],
+        turn = await session.get(
+            AgentRun, uuid.UUID(state["run_id"]), populate_existing=True, with_for_update=True,
         )
+        if turn is None or turn.is_terminal:
+            return {"plan": plan_mod.cancel_remaining(steps)}
+        # 工具提交时在同一事务内关联父计划；不能等图增量写回，否则取消会漏子任务。
+        session.info["agent_step"] = (turn.id, step["id"])
+        try:
+            _, results = await history_service.apply_tool_calls(
+                session,
+                user_id=uuid.UUID(state["user_id"]),
+                session_id=uuid.UUID(state["session_id"]),
+                calls=[history_service.ToolCall(name=step["tool"], params=step["params"])],
+            )
+        finally:
+            session.info.pop("agent_step", None)
     result = results[0] if results else None
     if result is None:
         step["status"] = plan_mod.FAILED
@@ -287,6 +298,12 @@ async def reflect_node(state: GraphState) -> dict[str, Any]:
 
     # 丢弃失败步与它的未完成依赖，换成新计划（已完成步保留在前）
     kept = [step for step in steps if step["status"] == plan_mod.SUCCEEDED]
+    # validate 每次都从 s1 编号；必须连同依赖一起重映射，不能覆盖已完成步。
+    prefix = f"r{replans}_{uuid.uuid4().hex}_"
+    id_map = {step["id"]: f"{prefix}{step['id']}" for step in replanned}
+    for step in replanned:
+        step["id"] = id_map[step["id"]]
+        step["depends_on"] = [id_map[dep] for dep in step["depends_on"]]
     merged = [*kept, *replanned]
     await emit("observation", f"已重新规划剩余 {len(replanned)} 步")
     await _trace_reflect(

@@ -78,6 +78,16 @@ async def _agent_event_stream(
     started = time.monotonic()
 
     async with events.subscription(run_id) as stream:
+        # 路由鉴权时的对象可能已过期；订阅建立后用新事务读取，补上窗口内终态。
+        from app.models import AgentRun
+        from app.models.agent_run import AWAITING_CONFIRM
+
+        async with runs_service.session_scope() as session:
+            turn = await session.get(AgentRun, run_id)
+            if turn is None:
+                return
+            status_at_open = turn.status
+            done_at_open = turn.is_terminal or turn.status == AWAITING_CONFIRM
         yield frame(SnapshotEvent(run_id=run_id, status=status_at_open))
 
         # 回放断线期间错过的 CoT（前端按 seq 去重，与实时帧重叠也幂等）
@@ -137,6 +147,12 @@ async def _event_stream(run_id: uuid.UUID, run):
     started = time.monotonic()
 
     async with events.subscription(run_id) as stream:
+        from app.models import ToolRun
+
+        async with runs_service.session_scope() as session:
+            run = await session.get(ToolRun, run_id)
+            if run is None:
+                return
         yield frame(runs_service.snapshot_of(run))
 
         if run.is_terminal:

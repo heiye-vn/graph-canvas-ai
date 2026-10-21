@@ -17,6 +17,8 @@
     · undo 之后再来新操作 → 先把指针之后的记录删掉（截断 redo 分支）。
       分支一旦留着，redo 会跳进一条从来没人验证过的路径。
     · 历史超过上限 → 丢最老的，且**不重排 seq**。撤到边界就停住。
+    · 写入锁顺序固定为会话 → 历史；读文档 / 指针前先锁会话并刷新缓存，
+      避免 redo 截断与 worker 写回反向加锁，也避免旧 revision 覆盖新版本。
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import EditHistory, EditSession
@@ -89,7 +91,7 @@ async def apply_tool_calls(
     注意这里**不用** `sessions_service.replace_doc`：那个函数自己会 commit，
     会把「写文档」和「写历史」劈成两个事务。
     """
-    edit_session = await sessions_service.get_edit_session(session, user_id, session_id)
+    edit_session = await sessions_service.lock_edit_session(session, user_id, session_id)
     doc = LayerDocument.model_validate(edit_session.doc)
 
     steps: list[StepResult] = []
@@ -181,6 +183,10 @@ async def apply_tool_calls(
     return edit_session, steps
 
 
+class RevisionConflict(Exception):
+    """任务计算期间画布已经变化，整份结果不得覆盖后续编辑。"""
+
+
 async def record_external(
     session: AsyncSession,
     edit_session: EditSession,
@@ -188,6 +194,7 @@ async def record_external(
     tool: str,
     label: str,
     after: LayerDocument,
+    expected_revision: int,
     params: dict[str, Any] | None = None,
 ) -> None:
     """worker 进程替排队型工具落文档 + 历史（拆层这类「执行后整份换文档」的任务）。
@@ -195,19 +202,35 @@ async def record_external(
     与 apply_tool_calls 共用 _record：撤销栈里必须找得到 worker 干的活，
     否则用户拆完层按撤销会「没反应」。调用方负责在同一事务里 commit。
     """
-    before = LayerDocument.model_validate(edit_session.doc)
-    await _record(
-        session,
-        edit_session,
-        tool=tool,
-        label=label,
-        changed=True,
-        before=before,
-        after=after,
-        params=params or {},
-    )
-    edit_session.doc = after.model_dump(mode="json")
-    edit_session.revision += 1
+    # worker 捕获异常后仍会提交 run 的失败状态，保存点避免一并提交半份历史。
+    async with session.begin_nested():
+        # 条件 UPDATE 同时校验版本并持有行锁直到外层提交，不能只比较 identity map。
+        result = await session.execute(
+            update(EditSession)
+            .where(
+                EditSession.id == edit_session.id,
+                EditSession.user_id == edit_session.user_id,
+                EditSession.revision == expected_revision,
+            )
+            .values(revision=EditSession.revision + 1)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise RevisionConflict("画布已更新，任务结果未应用；请基于最新画布重试")
+        # 排队记录可以只改变历史指针；拿锁后必须读取最新文档和指针。
+        await session.refresh(edit_session)
+        before = LayerDocument.model_validate(edit_session.doc)
+        await _record(
+            session,
+            edit_session,
+            tool=tool,
+            label=label,
+            changed=True,
+            before=before,
+            after=after,
+            params=params or {},
+        )
+        edit_session.doc = after.model_dump(mode="json")
 
 
 async def _record(
@@ -221,7 +244,7 @@ async def _record(
     after: LayerDocument,
     params: dict[str, Any],
 ) -> EditHistory:
-    """追加一条历史，并顺手截断 redo 分支 + 裁剪超量记录。"""
+    """调用方已锁定会话行；追加历史，并截断 redo 分支、裁剪超量记录。"""
     # 1) 截断：站在第 k 格时又做了新动作，那么第 k 格之后的分支永远不该再到达
     await session.execute(
         delete(EditHistory).where(
@@ -327,7 +350,7 @@ async def undo(
 
     没有可撤销的操作时抛 409：这不是错误路径，是状态本身不允许。
     """
-    edit_session = await sessions_service.get_edit_session(session, user_id, session_id)
+    edit_session = await sessions_service.lock_edit_session(session, user_id, session_id)
     if edit_session.history_seq <= 0:
         raise _nothing_to_do("撤销")
 
@@ -355,7 +378,7 @@ async def redo(
     session: AsyncSession, *, user_id: uuid.UUID, session_id: uuid.UUID
 ) -> TimeTravelResult:
     """前进一步：把下一格的 after 快照写回文档。跳过 changed=False 的条目，理由同 undo。"""
-    edit_session = await sessions_service.get_edit_session(session, user_id, session_id)
+    edit_session = await sessions_service.lock_edit_session(session, user_id, session_id)
 
     seq = edit_session.history_seq + 1
     label: str | None = None

@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_object_session
 
 from app.db import get_session_factory
 from app.models import ToolRun
@@ -103,13 +103,26 @@ async def report(
     只改内存里的对象，提交交给调用方（worker 里通常是下一步一并提交），
     避免一次任务写十几次库。事件是即时发的——这才是用户能看到的东西。
     """
+    values: dict[str, Any] = {}
     if to_running and run.status == "queued":
-        run.status = RUNNING
-        run.started_at = datetime.now(UTC)
+        values.update(status=RUNNING, started_at=datetime.now(UTC))
     if progress is not None:
-        run.progress = max(0, min(100, progress))
+        values["progress"] = max(0, min(100, progress))
     if stage is not None:
-        run.stage = stage
+        values["stage"] = stage
+    if to_running:
+        if not await _update_active(run, values):
+            return
+    else:
+        session = async_object_session(run)
+        if session is not None:
+            with session.no_autoflush:
+                await session.refresh(run)
+        if run.is_terminal:
+            return
+        # 普通进度不执行 UPDATE，避免在 Provider await 期间持有任务行锁、阻塞取消。
+        for key, value in values.items():
+            setattr(run, key, value)
 
     await events.publish(
         ProgressEvent(
@@ -120,28 +133,56 @@ async def report(
     )
 
 
+async def lock_active(session: AsyncSession, run: ToolRun) -> bool:
+    """采用文档前锁住任务，取消与成功以先拿锁并提交的一方为准。"""
+    current = await session.get(ToolRun, run.id, populate_existing=True, with_for_update=True)
+    return current is not None and not current.is_terminal
+
+
+async def _update_active(run: ToolRun, values: dict[str, Any]) -> bool:
+    if run.is_terminal:
+        return False
+    session = async_object_session(run)
+    if session is None:
+        for key, value in values.items():
+            setattr(run, key, value)
+        return True
+    # 不相信 worker 的 identity map；条件更新防止另一个请求已提交的取消被覆盖。
+    with session.no_autoflush:
+        result = await session.execute(
+            update(ToolRun)
+            .where(ToolRun.id == run.id, ToolRun.status.not_in(TERMINAL_STATUSES))
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+    await session.refresh(run)
+    return result.rowcount == 1
+
+
 async def succeed(run: ToolRun, result: dict[str, Any]) -> None:
-    run.status = SUCCEEDED
-    run.progress = 100
-    run.result = result
-    run.error = None
-    run.finished_at = datetime.now(UTC)
+    await _update_active(run, {
+        "status": SUCCEEDED, "progress": 100, "result": result,
+        "error": None, "finished_at": datetime.now(UTC),
+    })
 
 
 async def fail(run: ToolRun, *, code: str, message: str, recoverable: bool = True) -> None:
-    run.status = FAILED
-    run.error = {"code": code, "message": message, "recoverable": recoverable}
-    run.finished_at = datetime.now(UTC)
+    if not await _update_active(run, {
+        "status": FAILED,
+        "error": {"code": code, "message": message, "recoverable": recoverable},
+        "finished_at": datetime.now(UTC),
+    }):
+        return
     await events.publish(
         ErrorEvent(run_id=run.id, code=code, message=message, recoverable=recoverable)
     )
 
 
 async def cancel(run: ToolRun) -> None:
-    if run.status in TERMINAL_STATUSES:
+    if not await _update_active(run, {
+        "status": CANCELLED, "finished_at": datetime.now(UTC),
+    }):
         return
-    run.status = CANCELLED
-    run.finished_at = datetime.now(UTC)
     # 必须推一帧 done：取消是用户在另一个请求里触发的，worker 侧不会产生任何事件。
     # 少了这一帧，前端的进度条要一直转到超时才知道任务没了。
     await events.publish(DoneEvent(run_id=run.id, status=CANCELLED))

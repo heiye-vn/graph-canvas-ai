@@ -1,7 +1,7 @@
 """局部编辑任务（M6，ARQ worker 内执行）。
 
 链路：读选区 → 拍平画布 → Provider 局部生成（边长 clamp [512, 2048]）→
-结果缩回原尺寸 → 只把选区内像素换掉 → 产物只上墙（不改文档）。
+结果缩回原尺寸 → 只把选区内像素换掉 → 服务端原子采用文档及撤销历史。
 
  revision 双重校验：
     1. mask_bytes 走选区缓存比对（缓存 payload.revision != 当前 → 视为无选区）
@@ -18,13 +18,16 @@ from uuid import UUID
 from PIL import Image
 
 from app.edits.mask import MaskSizeMismatch, apply_masked
-from app.models import ToolRun
+from app.models import SessionAsset, ToolRun
 from app.providers import get_image_provider
 from app.providers.base import ProviderError
 from app.schemas.events import DoneEvent, ResultEvent
+from app.schemas.layer_doc import LayerDocument
 from app.services import assets as asset_service
 from app.services import events, selections, storage, tool_exec
 from app.services import flatten as flatten_service
+from app.services import history as history_service
+from app.services import layer_doc as L
 from app.services import runs as runs_service
 from app.services import sessions as sessions_service
 
@@ -54,9 +57,11 @@ async def inpaint_region(ctx, run_id: str) -> None:
             await events.publish(DoneEvent(run_id=run.id, status=run.status))
             return
 
-        record = await sessions_service.get_edit_session(session, run.user_id, UUID(session_id))
-
+        result_event = None
         try:
+            record = await sessions_service.get_edit_session(session, run.user_id, UUID(session_id))
+            expected_revision = record.revision
+            doc = LayerDocument.model_validate(record.doc)
             await runs_service.report(run, progress=10, stage="读取选区", to_running=True)
             await session.commit()
 
@@ -76,30 +81,44 @@ async def inpaint_region(ctx, run_id: str) -> None:
 
             edited = await _edit_with_clamp(run, source, params.get("prompt") or "", mask=mask)
 
+            if not await runs_service.lock_active(session, run):
+                return
             await runs_service.report(run, progress=80, stage="合并选区")
             output = apply_masked(source, edited, mask)
 
             asset = await asset_service.create_from_bytes(
                 session, user_id=run.user_id, data=output, kind="image"
             )
-            await events.publish(
-                ResultEvent(
-                    run_id=run.id,
-                    asset_id=asset.id,
-                    url=storage.presign_get(asset.s3_key),
-                    wall_only=True,
-                )
+            layer = L.new_image_layer(
+                asset.id, width=doc.canvas.width, height=doc.canvas.height,
+                name="局部消除结果" if run.tool == "erase_region" else "局部替换结果",
             )
+            # 产物已包含整个合成画布；旧图层全部隐藏，避免文字/半透明层被绘制两遍。
+            updated = doc.model_copy(deep=True)
+            for old_layer in updated.layers:
+                old_layer.visible = False
+            updated = L.add_layer(updated, layer)
+            updated.active_layer_id = layer.id
+            await history_service.record_external(
+                session, record, tool=run.tool, label=layer.name, after=updated,
+                expected_revision=expected_revision, params={"run_id": run_id},
+            )
+            session.add(SessionAsset(session_id=record.id, asset_id=asset.id))
             await runs_service.succeed(
                 run,
                 {
                     "asset_ids": [str(asset.id)],
-                    "adopt_asset_id": str(asset.id),
+                    "document": updated.model_dump(mode="json"),
                     "session_id": session_id,
+                    "applied_revision": record.revision,
                 },
             )
-            # 选区用完即弃：遮罩对应的画布马上要被采用结果替换掉
-            await selections.clear(record.id)
+            result_event = ResultEvent(
+                run_id=run.id, asset_id=asset.id,
+                url=storage.presign_get(asset.s3_key), wall_only=True,
+            )
+        except history_service.RevisionConflict as exc:
+            await runs_service.fail(run, code="revision_conflict", message=str(exc))
         except (MaskSizeMismatch, tool_exec.ToolError) as exc:
             logger.info("任务 %s 被判废：%s", run_id, exc)
             await runs_service.fail(run, code="stale_selection", message=str(exc), recoverable=True)
@@ -113,6 +132,9 @@ async def inpaint_region(ctx, run_id: str) -> None:
             )
         finally:
             await session.commit()
+            # 成功事件必须晚于文档、历史和 run 的提交；推送失败不反转已提交的成功。
+            if result_event is not None and run.status == "succeeded":
+                await events.publish(result_event)
             await events.publish(DoneEvent(run_id=run.id, status=run.status))
 
 

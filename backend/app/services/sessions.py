@@ -140,6 +140,19 @@ async def get_edit_session(
     return edit_session
 
 
+async def lock_edit_session(
+    session: AsyncSession, user_id: uuid.UUID, session_id: uuid.UUID
+) -> EditSession:
+    """所有文档 / 历史写入先锁会话行并刷新缓存，再访问历史，锁持有到事务结束。"""
+    with session.no_autoflush:
+        edit_session = await session.get(
+            EditSession, session_id, populate_existing=True, with_for_update=True
+        )
+    if edit_session is None or edit_session.user_id != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="会话不存在")
+    return edit_session
+
+
 async def list_sessions(
     session: AsyncSession, user_id: uuid.UUID, limit: int = 50
 ) -> list[EditSession]:
@@ -174,7 +187,7 @@ async def add_assets(
     重复加入同一个素材不会报错：唯一约束挡掉关联表的重复行，
     图层也不再加第二层（同样的图叠两遍毫无意义，还会让后续工具误判层级）。
     """
-    edit_session = await get_edit_session(session, user_id, session_id)
+    edit_session = await lock_edit_session(session, user_id, session_id)
     assets = await _owned_assets(session, user_id, asset_ids)
 
     existing = await session_assets(session, edit_session.id)
@@ -199,6 +212,7 @@ async def add_assets(
 
     if changed:
         edit_session.doc = doc.model_dump(mode="json")
+        edit_session.revision += 1
 
     await session.commit()
     await session.refresh(edit_session)
@@ -217,7 +231,7 @@ async def replace_doc(
     调用方（M4 起的工具 / 前端）给的必须是**完整文档**：层级增删后，
     用 patch 表达这些变化既啰嗦又容易错。
     """
-    edit_session = await get_edit_session(session, user_id, session_id)
+    edit_session = await lock_edit_session(session, user_id, session_id)
     edit_session.doc = doc.model_dump(mode="json")
     # 整份替换同样改变像素 → 选区作废（revision 裁判覆盖所有改文档的路径）
     edit_session.revision += 1
@@ -239,7 +253,7 @@ async def rename_session(
 async def delete_session(
     session: AsyncSession, *, user_id: uuid.UUID, session_id: uuid.UUID
 ) -> None:
-    edit_session = await get_edit_session(session, user_id, session_id)
+    edit_session = await lock_edit_session(session, user_id, session_id)
     await session.delete(edit_session)
     await session.commit()
 

@@ -99,10 +99,14 @@ async def _finish(
     label: str,
     params: dict,
     asset_ids: list[str],
+    expected_revision: int,
 ) -> None:
     """文档与历史同一事务 —— 与 apply_tool_calls 同一条不变量。"""
+    if not await runs_service.lock_active(session, run):
+        return
     await history_service.record_external(
-        session, record, tool=tool, label=label, after=doc, params=params
+        session, record, tool=tool, label=label, after=doc, params=params,
+        expected_revision=expected_revision,
     )
     await runs_service.succeed(
         run,
@@ -140,6 +144,7 @@ async def remove_background(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=15, stage="读取图层", to_running=True)
             await session.commit()
 
+            expected_revision = record.revision
             doc = LayerDocument.model_validate(record.doc)
             layer = L.resolve_layer(doc, params.get("layer_id"))
             if layer.type != "image" or layer.source is None:
@@ -168,7 +173,10 @@ async def remove_background(ctx, run_id: str) -> None:
                 label=f"已去除「{layer.name}」的背景",
                 params={"layer_id": str(layer.id)},
                 asset_ids=[str(new_asset.id)],
+                expected_revision=expected_revision,
             )
+        except history_service.RevisionConflict as exc:
+            await _fail(session, run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
             await _fail(session, run, exc.code, exc.message)
@@ -206,6 +214,7 @@ async def upscale_image(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
 
+            expected_revision = record.revision
             doc = LayerDocument.model_validate(record.doc)
             longest = max(doc.canvas.width, doc.canvas.height)
             scale = min(int(params.get("scale") or 2), _MAX_CANVAS_EDGE // longest)
@@ -258,7 +267,10 @@ async def upscale_image(ctx, run_id: str) -> None:
                 label=f"超分：画布放大到 {scale} 倍",
                 params={"scale": scale},
                 asset_ids=[str(new_asset.id)],
+                expected_revision=expected_revision,
             )
+        except history_service.RevisionConflict as exc:
+            await _fail(session, run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
             await _fail(session, run, exc.code, exc.message)
@@ -296,6 +308,7 @@ async def replace_background(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
 
+            expected_revision = record.revision
             doc = LayerDocument.model_validate(record.doc)
             source = await flatten_service.flatten_session(session, record)
             prompt = params.get("prompt") or ""
@@ -329,7 +342,10 @@ async def replace_background(ctx, run_id: str) -> None:
                 label="已替换背景",
                 params={"prompt": prompt},
                 asset_ids=[str(new_asset.id)],
+                expected_revision=expected_revision,
             )
+        except history_service.RevisionConflict as exc:
+            await _fail(session, run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
             await _fail(session, run, exc.code, exc.message)
@@ -366,6 +382,7 @@ async def edit_image(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
 
+            expected_revision = record.revision
             doc = LayerDocument.model_validate(record.doc)
             source = await flatten_service.flatten_session(session, record)
             prompt = params.get("prompt") or ""
@@ -398,7 +415,10 @@ async def edit_image(ctx, run_id: str) -> None:
                 label=f"已编辑：{prompt[:24]}",
                 params={"prompt": prompt},
                 asset_ids=[str(new_asset.id)],
+                expected_revision=expected_revision,
             )
+        except history_service.RevisionConflict as exc:
+            await _fail(session, run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
             await _fail(session, run, exc.code, exc.message)
@@ -453,6 +473,7 @@ async def expand_canvas(ctx, run_id: str) -> None:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
 
+            expected_revision = record.revision
             doc = LayerDocument.model_validate(record.doc)
             width, height = _cover_size(
                 doc.canvas.width, doc.canvas.height, params.get("ratio") or "1:1"
@@ -497,7 +518,10 @@ async def expand_canvas(ctx, run_id: str) -> None:
                 label=f"已扩图到 {params.get('ratio') or '1:1'}",
                 params={"ratio": params.get("ratio"), "prompt": params.get("prompt")},
                 asset_ids=[str(new_asset.id)],
+                expected_revision=expected_revision,
             )
+        except history_service.RevisionConflict as exc:
+            await _fail(session, run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
             await _fail(session, run, exc.code, exc.message)
