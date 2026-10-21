@@ -31,7 +31,6 @@ import {
   message,
 } from "antd";
 import { ClearOutlined } from "@ant-design/icons";
-import type Konva from "konva";
 
 import {
   clearSelection,
@@ -44,7 +43,7 @@ import { invokeTool, listTools } from "@/api/tools";
 import { getHistory, redoStep, undoStep } from "@/api/history";
 import AdjustPanel from "@/components/editor/AdjustPanel";
 import CandidateStrip from "@/components/editor/CandidateStrip";
-import CanvasStage from "@/components/editor/CanvasStage";
+import CanvasStage, { exportDocumentPng } from "@/components/editor/CanvasStage";
 import type {
   CropBox,
   SelectionMode,
@@ -80,12 +79,6 @@ const CROP_RATIOS: Record<CropRatio, number | null> = {
   "16:9": 16 / 9,
 };
 
-/** 排队型（重像素）工具 → 采用后的图层名。 */
-const QUEUED_TOOL_LABEL: Record<string, string> = {
-  erase_region: "局部消除结果",
-  replace_region: "局部替换结果",
-};
-
 /**
  * 这些排队工具在 worker 里**自己改文档**并落撤销栈
  * （拆层、去背景、换背景、扩图、超分），完成后前端只需重新拉会话 ——
@@ -98,6 +91,8 @@ const DOCUMENT_QUEUED_TOOLS = new Set([
   "expand_canvas",
   "upscale_image",
   "edit_image",
+  "erase_region",
+  "replace_region",
 ]);
 
 function clamp(value: number, min: number, max: number) {
@@ -168,7 +163,11 @@ export default function EditorPage() {
   const [cropBox, setCropBox] = useState<CropBox | null>(null);
   const [cropRatio, setCropRatio] = useState<CropRatio>("free");
   // 调色预览：只改画布渲染，应用才落文档
-  const [adjustPreview, setAdjustPreview] = useState<Adjustments | null>(null);
+  const [adjustPreview, setAdjustPreview] = useState<{
+    layerId: string;
+    persistedKey: string;
+    adjustments: Adjustments;
+  } | null>(null);
   // 拆层选项：勾上后顶栏那一下会带上 include_text
   const [splitIncludeText, setSplitIncludeText] = useState(false);
   // 排队任务浮层：默认展开，可收成一个小胶囊（不挡画面）
@@ -188,7 +187,6 @@ export default function EditorPage() {
     usePanelWidth("editor:leftPanelWidth", "left");
   const { width: rightPanelWidth, onHandlePointerDown: onRightPanelDrag } =
     usePanelWidth("editor:rightPanelWidth", "right");
-  const stageRef = useRef<Konva.Stage | null>(null);
 
   const data = session.data as SessionOut | undefined;
   const revision = data?.revision ?? null;
@@ -278,7 +276,6 @@ export default function EditorPage() {
 
   // ---- 排队任务的进度流与自动采用 ----
   const runStream = useRunStream(activeRun?.id ?? null);
-  const adoptingRef = useRef(false);
 
   useEffect(() => {
     if (!activeRun || !runStream.closed || runStream.status !== "succeeded")
@@ -300,35 +297,9 @@ export default function EditorPage() {
       return;
     }
 
-    const asset = runStream.candidates[0];
-    if (!asset) {
-      setActiveRun(null);
-      return;
-    }
-    // 结果只上墙 → 自动采用为新图层（与候选页同一入口 add_image_layer）
-    if (!adoptingRef.current) {
-      adoptingRef.current = true;
-      runTool.mutate(
-        {
-          name: "add_image_layer",
-          params: {
-            asset_id: asset.assetId,
-            name: QUEUED_TOOL_LABEL[activeRun.tool] ?? "编辑结果",
-          },
-        },
-        {
-          onSuccess: () =>
-            message.success(
-              "局部编辑完成，已加入画布。顶栏「对比」可查看编辑前的样子",
-            ),
-          onSettled: () => {
-            adoptingRef.current = false;
-            setActiveRun(null);
-          },
-        },
-      );
-    }
-  }, [activeRun, runStream, runTool, queryClient, sessionId]);
+    // 其他任务只生成候选，不在前端猜测采用规则。
+    setActiveRun(null);
+  }, [activeRun, runStream, queryClient, sessionId]);
 
   /** 排队任务失败时别让卡片「默默消失」—— 用户会以为图已经改好了。 */
   useEffect(() => {
@@ -374,7 +345,7 @@ export default function EditorPage() {
     return map;
   }, [data]);
 
-  const { images, pending, failed } = useLoadedImages(urlMap);
+  const { images, pending, failed, reload } = useLoadedImages(urlMap);
 
   /**
    * 画布上「有图层但没有像素」的素材集合。
@@ -425,6 +396,17 @@ export default function EditorPage() {
     }
     return topmostVisibleImageLayer(data.doc) ?? null;
   }, [data, selectedLayerId]);
+
+  const selectedAdjustmentsKey = JSON.stringify(selectedLayer?.adjustments);
+  const previewAdjustments = panel === "adjust" && adjustPreview
+    && adjustPreview.layerId === selectedLayer?.id
+    && adjustPreview.persistedKey === selectedAdjustmentsKey
+    ? adjustPreview : null;
+  const onAdjustPreview = useCallback((adjustments: Adjustments | null) => {
+    setAdjustPreview(adjustments && selectedLayer
+      ? { layerId: selectedLayer.id, persistedKey: selectedAdjustmentsKey, adjustments }
+      : null);
+  }, [selectedLayer?.id, selectedAdjustmentsKey]);
 
   /** 画布上的变换框只认「真的点过」的图层，不回落到当前图。 */
   const transformLayerId = useMemo(() => {
@@ -492,18 +474,17 @@ export default function EditorPage() {
     runTool.mutate({ name, params });
   }
 
-  /** 画布导出：Konva Stage 直接出 PNG（严格按画布设定分辨率 1:1 输出）。 */
+  /** 只导出持久文档，编辑视图状态不参与 PNG。 */
   function exportPng() {
-    const stage = stageRef.current;
-    if (!stage || !data) return;
-    // 抵消 Stage 当前为了适应屏幕或用户缩放产生的 scale
-    const currentStageScale = stage.scaleX() || 1;
-    const pixelRatio = 1 / currentStageScale;
-
-    const link = document.createElement("a");
-    link.href = stage.toDataURL({ pixelRatio, mimeType: "image/png" });
-    link.download = `${data.title || "画布"}.png`;
-    link.click();
+    if (!data) return;
+    try {
+      const link = document.createElement("a");
+      link.href = exportDocumentPng(data.doc, images);
+      link.download = `${data.title || "画布"}.png`;
+      link.click();
+    } catch (error) {
+      message.error(`PNG 导出失败：${error instanceof Error ? error.message : "请重试"}`);
+    }
   }
 
   function stepZoom(direction: 1 | -1) {
@@ -733,11 +714,15 @@ export default function EditorPage() {
           action={
             <button
               type="button"
-              onClick={() => {
-                healedFailures.current = null;
-                void queryClient.invalidateQueries({
-                  queryKey: ["session", sessionId],
-                });
+              onClick={async () => {
+                try {
+                  const result = await session.refetch();
+                  reload();
+                  if (result.isError) message.error("素材地址刷新失败，已尝试重新加载图片，请稍后重试");
+                } catch {
+                  reload();
+                  message.error("重新加载失败，请稍后重试");
+                }
               }}
               className="cursor-pointer rounded border border-amber-400 px-2 py-0.5 text-xs text-amber-700 hover:bg-amber-50"
             >
@@ -890,7 +875,6 @@ export default function EditorPage() {
                 images={images}
                 loading={pending}
                 zoom={zoom}
-                stageRef={stageRef}
                 onScaleChange={setCurrentScale}
                 selectionMode={selectionMode}
                 brushRadius={brushRadius}
@@ -900,11 +884,7 @@ export default function EditorPage() {
                 hiddenLayerIds={hiddenLayerIds}
                 failedAssetIds={failedAssetIds}
                 selectedLayerId={transformLayerId}
-                previewAdjustments={
-                  panel === "adjust" && selectedLayer && adjustPreview
-                    ? { layerId: selectedLayer.id, adjustments: adjustPreview }
-                    : null
-                }
+                previewAdjustments={previewAdjustments}
                 onSelectLayer={(layerId) => setSelectedLayerId(layerId)}
                 onTransform={handleTransform}
                 cropMode={cropping}
@@ -1041,7 +1021,7 @@ export default function EditorPage() {
                 <AdjustPanel
                   key={selectedLayer.id}
                   layer={selectedLayer}
-                  onPreview={setAdjustPreview}
+                  onPreview={onAdjustPreview}
                   applying={runTool.isPending}
                   onApply={(adjustments) => {
                     invoke("adjust_color", {
@@ -1092,6 +1072,7 @@ export default function EditorPage() {
                   </h2>
                   <ToolPanel
                     sessionId={sessionId}
+                    selectedLayer={selectedLayer}
                     selected={panel === "tool" ? toolName : null}
                     onSelect={(name) => {
                       setToolName(name || null);

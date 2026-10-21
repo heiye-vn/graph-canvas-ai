@@ -65,7 +65,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       /* 非 JSON 响应，保留默认文案 */
     }
-    if (resp.status === 401) {
+    if (resp.status === 401 && token === tokenStore.get()) {
       tokenStore.set(null) // 令牌失效立即清理，避免带着坏 token 反复重试
       unauthorizedHandler?.()
     }

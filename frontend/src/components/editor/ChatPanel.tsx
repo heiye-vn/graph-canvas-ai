@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Popover, Tag } from "antd";
+import { Alert, Button, Popover, Tag } from "antd";
 import {
   CheckCircleFilled,
   CheckOutlined,
@@ -87,7 +87,9 @@ function formatWhen(iso: string): string {
   const pad = (n: number) => String(n).padStart(2, "0");
   const hhmm = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   const sameDay = date.toDateString() === new Date().toDateString();
-  return sameDay ? hhmm : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hhmm}`;
+  return sameDay
+    ? hhmm
+    : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${hhmm}`;
 }
 
 /**
@@ -103,12 +105,18 @@ function ExpandableText({
 }) {
   const [expanded, setExpanded] = useState(false);
   if (text.length <= REPLY_COLLAPSE_CHARS) {
-    return <p className={`m-0 whitespace-pre-wrap break-words ${className ?? ""}`}>{text}</p>;
+    return (
+      <p
+        className={`m-0 whitespace-pre-wrap wrap-break-word ${className ?? ""}`}
+      >
+        {text}
+      </p>
+    );
   }
   return (
     <div>
       <p
-        className={`m-0 whitespace-pre-wrap break-words ${expanded ? "" : "line-clamp-3"} ${className ?? ""}`}
+        className={`m-0 whitespace-pre-wrap wrap-break-word ${expanded ? "" : "line-clamp-3"} ${className ?? ""}`}
       >
         {text}
       </p>
@@ -267,12 +275,26 @@ export default function ChatPanel({
             open={historyOpen}
             onOpenChange={setHistoryOpen}
             content={
-              <HistoryList
-                runs={history.data ?? []}
-                loading={history.isLoading}
-                activeRunId={activeRunId}
-                onPick={jumpToRun}
-              />
+              history.isError ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="对话历史加载失败"
+                  description={history.error.message}
+                  action={
+                    <Button size="small" onClick={() => void history.refetch()}>
+                      重试
+                    </Button>
+                  }
+                />
+              ) : (
+                <HistoryList
+                  runs={history.data ?? []}
+                  loading={history.isLoading}
+                  activeRunId={activeRunId}
+                  onPick={jumpToRun}
+                />
+              )
             }
           >
             <button
@@ -293,7 +315,21 @@ export default function ChatPanel({
         ref={listRef}
         className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4"
       >
+        {history.isError && (
+          <Alert
+            type="error"
+            showIcon
+            message="对话历史加载失败"
+            description={history.error.message}
+            action={
+              <Button size="small" onClick={() => void history.refetch()}>
+                重试
+              </Button>
+            }
+          />
+        )}
         {messages.length === 0 &&
+          !history.isError &&
           (history.isLoading ? (
             <div className="flex items-center gap-2 p-3 text-[13px] text-slate-400">
               <LoadingOutlined />
@@ -363,6 +399,8 @@ export default function ChatPanel({
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229)
+                return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 send(input);
@@ -543,7 +581,7 @@ function PlanCard({
                 <StepStatusBadge status={step.status} />
               </div>
               {step.message && (
-                <p className="m-0 mt-1 break-words pl-5 text-xs leading-relaxed text-slate-400">
+                <p className="m-0 mt-1 wrap-break-word pl-5 text-xs leading-relaxed text-slate-400">
                   {step.message}
                 </p>
               )}

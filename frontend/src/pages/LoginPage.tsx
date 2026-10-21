@@ -28,6 +28,7 @@ interface LoginLocationState {
   /** 从落地页输入完 prompt 被拦到登录页时，记下要去哪、带什么 */
   next?: string
   prompt?: string
+  nextState?: unknown
 }
 
 interface LoginForm {
@@ -39,8 +40,13 @@ export default function LoginPage() {
   const location = useLocation()
   const { user, loading, signIn, signUp } = useAuthStore()
 
-  const next = (location.state as LoginLocationState | null)?.next ?? '/create'
-  const carriedPrompt = (location.state as LoginLocationState | null)?.prompt
+  const state = location.state as LoginLocationState | null
+  const requestedNext = state?.next
+  const next = typeof requestedNext === 'string'
+    && /^\/(create|assets|candidates|editor|metrics)(?:[/?#]|$)/.test(requestedNext)
+    && !requestedNext.includes('\\')
+    ? requestedNext : '/create'
+  const nextState = state?.nextState ?? (typeof state?.prompt === 'string' ? { prompt: state.prompt } : undefined)
 
   // hooks 必须全部在任何提前 return 之前调用
   const [form] = Form.useForm<LoginForm>()
@@ -60,7 +66,7 @@ export default function LoginPage() {
   // 登录成功后 user 变化同样会走到这里 —— 导航只发生在这一处，prompt 不会丢。
   if (user) {
     return (
-      <Navigate to={next} replace state={carriedPrompt ? { prompt: carriedPrompt } : undefined} />
+      <Navigate to={next} replace state={nextState} />
     )
   }
 
@@ -99,7 +105,7 @@ export default function LoginPage() {
           </Link>
         </div>
 
-        <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-md">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 sm:p-8 shadow-md">
           <div className="flex justify-center mb-2">
             <BrandMark />
           </div>

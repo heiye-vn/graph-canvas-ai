@@ -3,8 +3,8 @@
  * 包含：多比例/多数量文生图、商业灵感推荐、极简原生拖拽上传、生图历史任务卡片流（带删除与全量资产库链接）。
  */
 
-import { useRef, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Popconfirm, Spin } from 'antd'
 import {
@@ -271,6 +271,11 @@ function RunHistoryItem({
             <div className="flex justify-center py-4">
               <Spin size="small" />
             </div>
+          ) : assetsQuery.isError ? (
+            <Alert type="error" showIcon message="任务素材加载失败"
+              description={assetsQuery.error.message}
+              action={<Button size="small" onClick={() => void assetsQuery.refetch()}>重试</Button>}
+            />
           ) : assetsQuery.data && assetsQuery.data.length > 0 ? (
             <div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -323,12 +328,24 @@ function RunHistoryItem({
 
 export default function CreatePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const queryClient = useQueryClient()
 
   const [prompt, setPrompt] = useState('')
   const [size, setSize] = useState<string>(SIZE_PRESETS[0].value)
   const [count, setCount] = useState(1)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const state = location.state as { prompt?: unknown; [key: string]: unknown } | null
+    if (typeof state?.prompt !== 'string') return
+    setPrompt(state.prompt)
+    const { prompt: _prompt, ...rest } = state
+    navigate(location.pathname + location.search + location.hash, {
+      replace: true,
+      state: Object.keys(rest).length ? rest : null,
+    })
+  }, [location, navigate])
 
   // 历史任务列表：只查询文生图任务，且只取最近 5 条展示，保证页面紧凑利落
   const runs = useQuery({
@@ -377,6 +394,7 @@ export default function CreatePage() {
 
   // 回车快捷键生成
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       if (prompt.trim().length > 0 && !generate.isPending) {
@@ -386,7 +404,7 @@ export default function CreatePage() {
   }
 
   return (
-    <div className="mx-auto max-w-4xl px-6 py-8">
+    <div className="mx-auto max-w-4xl px-3 py-6 sm:px-6 sm:py-8">
       {/* 极简大标题 */}
       <h1 className="text-2xl font-bold tracking-tight text-slate-900 mb-6 m-0">
         创作
@@ -436,7 +454,7 @@ export default function CreatePage() {
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
           <div className="flex flex-wrap items-center gap-4">
             {/* 比例选择 */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs text-slate-400 font-medium mr-1">比例</span>
               {SIZE_PRESETS.map((preset) => {
                 const active = size === preset.value
@@ -544,6 +562,11 @@ export default function CreatePage() {
           <div className="flex justify-center py-10">
             <Spin />
           </div>
+        ) : runs.isError ? (
+          <Alert type="error" showIcon message="历史素材加载失败"
+            description={runs.error.message}
+            action={<Button size="small" onClick={() => void runs.refetch()}>重试</Button>}
+          />
         ) : runs.data && runs.data.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-200 bg-white p-8 text-center text-xs text-slate-400">
             暂无文生图历史，在上方输入描述并生成第一组画面。

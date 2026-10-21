@@ -35,6 +35,7 @@ export async function downloadExportZip(
   sessionId: string,
   assetIds: string[],
   filename = 'export.zip',
+  signal?: AbortSignal,
 ): Promise<void> {
   const token = tokenStore.get()
   const query = encodeURIComponent(assetIds.join(','))
@@ -42,6 +43,7 @@ export async function downloadExportZip(
     `${API_BASE}/edit-sessions/${sessionId}/export?asset_ids=${query}`,
     {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      signal,
     },
   )
   if (!response.ok) {
@@ -49,6 +51,7 @@ export async function downloadExportZip(
   }
 
   const blob = await response.blob()
+  signal?.throwIfAborted()
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = url

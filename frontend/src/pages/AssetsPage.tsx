@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Button, Spin } from 'antd'
+import { Alert, Button, Spin } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 
 import { deleteAsset, listAssets } from '@/api/assets'
@@ -41,7 +41,7 @@ export default function AssetsPage() {
   const openEditor = useCreateSessionAndEdit()
   const [filter, setFilter] = useState<FilterKey>('image')
 
-  const { data, isLoading } = useQuery({ queryKey: ['assets'], queryFn: listAssets })
+  const { data, isLoading, isError, error, refetch } = useQuery({ queryKey: ['assets'], queryFn: listAssets })
 
   const remove = useMutation({
     mutationFn: (id: string) => deleteAsset(id),
@@ -69,8 +69,8 @@ export default function AssetsPage() {
         : '去创作中心生成或上传一张图片开启您的首个会话。'
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
-      <div className="flex items-center justify-between pb-6 border-b border-slate-200">
+    <div className="mx-auto max-w-5xl px-3 py-6 sm:px-6 sm:py-8">
+      <div className="flex flex-wrap items-center justify-between gap-3 pb-6 border-b border-slate-200">
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-xl font-bold text-slate-900 m-0">素材库</h1>
@@ -91,7 +91,7 @@ export default function AssetsPage() {
       </div>
 
       {/* 来源筛选：默认「作品」，投放尺寸与遮罩收起来 */}
-      <div className="mt-4 flex w-fit items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-1">
+      <div className="mt-4 flex w-fit max-w-full flex-wrap items-center gap-0.5 rounded-lg border border-slate-200 bg-white p-1">
         {FILTERS.map((item) => {
           const active = filter === item.key
           return (
@@ -123,6 +123,11 @@ export default function AssetsPage() {
           <div className="flex justify-center py-24">
             <Spin size="large" />
           </div>
+        ) : isError ? (
+          <Alert type="error" showIcon message="素材库加载失败"
+            description={error.message}
+            action={<Button size="small" onClick={() => void refetch()}>重试</Button>}
+          />
         ) : visible.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-200 bg-white p-12 text-center">
             <EmptyIllustration className="mx-auto mb-3 h-20" />

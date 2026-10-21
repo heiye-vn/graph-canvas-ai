@@ -1,4 +1,5 @@
-import { Navigate, Outlet } from 'react-router-dom'
+import { Fragment } from 'react'
+import { Navigate, Outlet, useLocation } from 'react-router-dom'
 import { Spin } from 'antd'
 
 import { useAuthStore } from '@/stores/authStore'
@@ -13,6 +14,7 @@ import { useAuthStore } from '@/stores/authStore'
  */
 export default function ProtectedRoute({ children }: { children?: React.ReactNode }) {
   const { user, loading } = useAuthStore()
+  const location = useLocation()
 
   if (loading) {
     return (
@@ -21,6 +23,11 @@ export default function ProtectedRoute({ children }: { children?: React.ReactNod
       </div>
     )
   }
-  if (!user) return <Navigate to="/login" replace />
-  return <>{children ?? <Outlet />}</>
+  if (!user) {
+    return <Navigate to="/login" replace state={{
+      next: location.pathname + location.search + location.hash,
+      nextState: location.state,
+    }} />
+  }
+  return <Fragment key={user.id}>{children ?? <Outlet />}</Fragment>
 }

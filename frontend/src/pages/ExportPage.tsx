@@ -10,10 +10,11 @@
  * 刷新页面不会保留 —— 重新生成即可，结果也挂在会话素材里。
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  Alert,
   Button,
   Checkbox,
   Empty,
@@ -30,6 +31,7 @@ import {
 } from "@ant-design/icons";
 
 import type { AssetOut } from "@/api/assets";
+import { ApiError } from "@/api/client";
 import {
   DELIVERY_RATIOS,
   RATIO_SIZES,
@@ -43,7 +45,21 @@ import { topmostVisibleImageLayer } from "@/domain/layerDoc";
 
 export default function ExportPage() {
   const { sessionId = "" } = useParams();
+  return <SessionExport key={sessionId} sessionId={sessionId} />;
+}
+
+function SessionExport({ sessionId }: { sessionId: string }) {
   const navigate = useNavigate();
+  const active = useRef(false);
+  const downloadController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      downloadController.current?.abort();
+    };
+  }, []);
 
   const session = useQuery({
     queryKey: ["session", sessionId],
@@ -61,11 +77,14 @@ export default function ExportPage() {
   const generate = useMutation({
     mutationFn: () => createExportSizes(sessionId, ratios),
     onSuccess: (result) => {
+      if (!active.current) return;
       setItems(result.items);
       setSelected(result.items.map((item) => item.id));
       message.success(`已生成 ${result.items.length} 张投放尺寸`);
     },
-    onError: (error) => message.error((error as Error).message),
+    onError: (error) => {
+      if (active.current) message.error(error.message);
+    },
   });
 
   const data = session.data as SessionOut | undefined;
@@ -82,6 +101,12 @@ export default function ExportPage() {
         <Skeleton active paragraph={{ rows: 6 }} />
       </div>
     );
+  }
+
+  if (session.isError && !(session.error instanceof ApiError && session.error.status === 404)) {
+    return <Result status="error" title="编辑会话加载失败" subTitle={session.error.message}
+      extra={<Button onClick={() => void session.refetch()}>重试</Button>}
+    />;
   }
 
   if (session.isError || !data) {
@@ -115,26 +140,29 @@ export default function ExportPage() {
   }
 
   async function pack() {
-    if (selected.length === 0) return;
+    if (selected.length === 0 || packing) return;
+    const controller = new AbortController();
+    downloadController.current = controller;
     setPacking(true);
     try {
       await downloadExportZip(
         sessionId,
         selected,
         `${data?.title || "export"}-物料.zip`,
+        controller.signal,
       );
-      message.success(`已打包 ${selected.length} 张`);
+      if (active.current) message.success(`已打包 ${selected.length} 张`);
     } catch (error) {
-      message.error((error as Error).message);
+      if (active.current && !controller.signal.aborted) message.error((error as Error).message);
     } finally {
-      setPacking(false);
+      if (active.current) setPacking(false);
     }
   }
 
   return (
     <div className="h-full overflow-y-auto bg-slate-50">
-      <div className="mx-auto max-w-4xl px-8 py-8">
-        <div className="mb-6 flex items-start justify-between">
+      <div className="mx-auto max-w-4xl px-3 py-6 sm:px-8 sm:py-8">
+        <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h1 className="m-0 text-xl font-semibold text-slate-900">导出物料</h1>
             <p className="mb-0 mt-1 text-sm text-slate-500">
@@ -152,7 +180,7 @@ export default function ExportPage() {
 
         {/* 当前会话 */}
         <section className="mb-5 rounded-lg border border-slate-200 bg-white p-4">
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4">
             {coverUrl ? (
               <img
                 src={coverUrl}
@@ -172,7 +200,9 @@ export default function ExportPage() {
             </div>
             <Select
               value={sessionId}
-              className="w-56"
+              className="w-full sm:w-56"
+              loading={sessions.isLoading}
+              disabled={sessions.isError}
               placeholder="切换会话"
               options={(sessions.data ?? []).map((item) => ({
                 value: item.id,
@@ -183,6 +213,13 @@ export default function ExportPage() {
           </div>
         </section>
 
+        {sessions.isError && (
+          <Alert className="mb-5" type="error" showIcon message="会话列表加载失败"
+            description={sessions.error.message}
+            action={<Button size="small" onClick={() => void sessions.refetch()}>重试</Button>}
+          />
+        )}
+
         {/* 投放尺寸 */}
         <section className="mb-5 rounded-lg border border-slate-200 bg-white p-4">
           <h2 className="m-0 text-sm font-semibold text-slate-900">投放尺寸</h2>
@@ -190,7 +227,7 @@ export default function ExportPage() {
             完整放入目标画幅，不裁切；多出来的部分用画布背景色补齐。
           </p>
 
-          <div className="grid grid-cols-3 gap-2.5">
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
             {DELIVERY_RATIOS.map((ratio) => {
               const active = ratios.includes(ratio);
               return (
@@ -230,7 +267,7 @@ export default function ExportPage() {
 
         {/* 导出清单 */}
         <section className="rounded-lg border border-slate-200 bg-white p-4">
-          <div className="mb-3 flex items-start justify-between gap-4">
+          <div className="mb-3 flex flex-wrap items-start justify-between gap-4">
             <div>
               <h2 className="m-0 text-sm font-semibold text-slate-900">导出清单</h2>
               <p className="mb-0 mt-1 text-[11px] text-slate-500">
@@ -272,7 +309,7 @@ export default function ExportPage() {
               }
             />
           ) : (
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               {items.map((item) => {
                 const checked = selected.includes(item.id);
                 return (

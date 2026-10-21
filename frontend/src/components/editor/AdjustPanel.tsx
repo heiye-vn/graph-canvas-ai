@@ -10,7 +10,7 @@
  * 所以这两项**松手才预览**；其余参数拖动即见。
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, Slider } from 'antd'
 
 import type { Adjustments, Layer } from '@/domain/layerDoc'
@@ -68,13 +68,15 @@ export default function AdjustPanel({
   onApply: (adjustments: Adjustments) => void
   applying?: boolean
 }) {
-  const [values, setValues] = useState<Adjustments>(layer.adjustments ?? ZERO)
+  // 按值而不是对象引用同步：撤销要更新，同值 refetch 不能吞掉未应用的草稿。
+  const persistedKey = JSON.stringify({ ...ZERO, ...layer.adjustments })
+  const persisted = useMemo<Adjustments>(() => JSON.parse(persistedKey), [persistedKey])
+  const [values, setValues] = useState<Adjustments>(persisted)
 
-  // 切换图层时跟随该图层的文档值（否则会把上一层的调色带过来）
   useEffect(() => {
-    setValues(layer.adjustments ?? ZERO)
+    setValues(persisted)
     onPreview(null)
-  }, [layer.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [layer.id, persisted, onPreview])
 
   function update(key: keyof Adjustments, value: number) {
     const next = { ...values, [key]: Math.round(value) }
@@ -88,7 +90,7 @@ export default function AdjustPanel({
   }
 
   const dirty = (Object.keys(ZERO) as (keyof Adjustments)[]).some(
-    (key) => values[key] !== 0,
+    (key) => values[key] !== persisted[key],
   )
 
   function renderControl(control: Control) {

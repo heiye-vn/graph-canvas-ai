@@ -27,6 +27,8 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type Konva from "konva";
 import type { MutableRefObject } from "react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 import {
   Circle,
   Group,
@@ -463,6 +465,71 @@ function CropOverlay({
   );
 }
 
+/** 编辑视图与导出共用同一份文档渲染；辅助节点不属于这里。 */
+function DocumentLayer({
+  doc, images, interactive = false, hiddenLayerIds, failedAssetIds,
+  previewAdjustments, onSelectLayer, onTransform,
+}: {
+  doc: LayerDocument;
+  images: ImageMap;
+  interactive?: boolean;
+  hiddenLayerIds?: string[] | null;
+  failedAssetIds?: string[] | null;
+  previewAdjustments?: { layerId: string; adjustments: Adjustments } | null;
+  onSelectLayer?: (id: string | null) => void;
+  onTransform?: (id: string, patch: TransformPatch) => void;
+}) {
+  return (
+    <KonvaLayer listening={interactive}>
+      {doc.canvas.background && (
+        <Rect x={0} y={0} width={doc.canvas.width} height={doc.canvas.height}
+          fill={doc.canvas.background} listening={false} />
+      )}
+      {doc.layers.filter((layer) => layer.visible && !hiddenLayerIds?.includes(layer.id)).map((layer) => {
+        if (layer.type === "text") return <TextNode key={layer.id} layer={layer} canvas={doc.canvas} />;
+        const assetId = layerSourceAssetId(layer);
+        const image = assetId ? images[assetId] : undefined;
+        if (!image) return assetId && failedAssetIds?.includes(assetId)
+          ? <MissingLayer key={layer.id} layer={layer} canvas={doc.canvas} /> : null;
+        return <LayerNode key={layer.id} layer={layer} canvas={doc.canvas} image={image}
+          interactive={interactive}
+          preview={previewAdjustments?.layerId === layer.id ? previewAdjustments.adjustments : null}
+          onSelect={onSelectLayer} onCommit={onTransform} />;
+      })}
+    </KonvaLayer>
+  );
+}
+
+/** 独立 Stage 只渲染持久文档：不截取对比、预览、选区、手柄或手势中的节点。 */
+export function exportDocumentPng(doc: LayerDocument, images: ImageMap): string {
+  for (const layer of doc.layers) {
+    if (!layer.visible || layer.type !== "image") continue;
+    const assetId = layerSourceAssetId(layer);
+    const image = assetId ? images[assetId] : undefined;
+    if (!image?.complete || !image.naturalWidth || !image.naturalHeight) {
+      throw new Error(`「${layer.name}」的图片未就绪，请等待加载或重新加载后导出`);
+    }
+  }
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const stage: MutableRefObject<Konva.Stage | null> = { current: null };
+  try {
+    flushSync(() => root.render(
+      <Stage ref={stage} width={doc.canvas.width} height={doc.canvas.height}>
+        <DocumentLayer doc={doc} images={images} />
+      </Stage>,
+    ));
+    if (!stage.current) throw new Error("导出画布未就绪，请重试");
+    const png = stage.current.toDataURL({ pixelRatio: 1, mimeType: "image/png" });
+    // Konva 会吞掉跨域异常并返回空串；不能把空结果当成下载成功。
+    if (!png.startsWith("data:image/png;base64,")) throw new Error("导出失败，图片可能受跨域限制或画布尺寸过大");
+    return png;
+  } finally {
+    root.unmount();
+    container.remove();
+  }
+}
+
 export default function CanvasStage({
   doc,
   images,
@@ -503,7 +570,7 @@ export default function CanvasStage({
   maskUrl?: string | null;
   markers?: SelectionMarker[];
   selectionBusy?: boolean;
-  /** 对比模式：临时隐藏这些图层（视图状态，不进文档、不影响导出以外的一切） */
+  /** 对比模式：仅在编辑视图隐藏图层，不进文档、不影响导出。 */
   hiddenLayerIds?: string[] | null;
   /** 素材图加载失败的 asset_id：这些层画占位告示，而不是静默消失 */
   failedAssetIds?: string[] | null;
@@ -579,16 +646,6 @@ export default function CanvasStage({
     if (selectionMode !== "brush") setStroke(null);
   }, [selectionMode]);
 
-  // layers 数组从下到上，直接顺序渲染即可（不需要翻转 —— 翻转是为了给面板看）
-  const hidden = useMemo(() => new Set(hiddenLayerIds ?? []), [hiddenLayerIds]);
-  const drawable = doc.layers.filter(
-    (layer) => layer.visible && !hidden.has(layer.id),
-  );
-  const failedAssets = useMemo(
-    () => new Set(failedAssetIds ?? []),
-    [failedAssetIds],
-  );
-
   /**
    * 变换框跟着选中层走。
    *
@@ -604,14 +661,14 @@ export default function CanvasStage({
       ? doc.layers.find((item) => item.id === selectedLayerId)
       : null;
     const node =
-      layer && layer.type === "image" && layer.visible && !cropMode
+      layer && layer.type === "image" && layer.visible && !cropMode && selectionMode === "off"
         ? current.findOne(
             (candidate: Konva.Node) => candidate.id() === `layer-${layer.id}`,
           )
         : null;
     tr.nodes(node ? [node] : []);
     tr.getLayer()?.batchDraw();
-  }, [selectedLayerId, doc.layers, scale, stage, cropMode]);
+  }, [selectedLayerId, doc.layers, images, hiddenLayerIds, scale, stage, cropMode, selectionMode]);
 
   function pointerNormalized(): NormalizedPoint | null {
     const pos = stage.current?.getPointerPosition();
@@ -693,60 +750,10 @@ export default function CanvasStage({
             onTouchMove={handleMouseMove}
             onTouchEnd={handleMouseUp}
           >
+            <DocumentLayer doc={doc} images={images} interactive={directManipulation}
+              hiddenLayerIds={hiddenLayerIds} failedAssetIds={failedAssetIds}
+              previewAdjustments={previewAdjustments} onSelectLayer={onSelectLayer} onTransform={onTransform} />
             <KonvaLayer listening={directManipulation}>
-              {doc.canvas.background && (
-                <Rect
-                  x={0}
-                  y={0}
-                  width={canvasWidth}
-                  height={canvasHeight}
-                  fill={doc.canvas.background}
-                  listening={false}
-                />
-              )}
-
-              {drawable.map((layer) => {
-                // M7 起文字层直接上画布（此前只在面板展示）——拆层产出的
-                // 文字层必须看得到，「文案可改且位置不变」才有验证对象
-                if (layer.type === "text") {
-                  return (
-                    <TextNode
-                      key={layer.id}
-                      layer={layer}
-                      canvas={doc.canvas}
-                    />
-                  );
-                }
-                const assetId = layerSourceAssetId(layer);
-                const image = assetId ? images[assetId] : undefined;
-                if (!image) {
-                  // 加载失败的素材给一块告示：静默 return null 等于「这一层凭空消失」
-                  return assetId && failedAssets.has(assetId) ? (
-                    <MissingLayer
-                      key={layer.id}
-                      layer={layer}
-                      canvas={doc.canvas}
-                    />
-                  ) : null;
-                }
-                return (
-                  <LayerNode
-                    key={layer.id}
-                    layer={layer}
-                    canvas={doc.canvas}
-                    image={image}
-                    interactive={directManipulation}
-                    preview={
-                      previewAdjustments?.layerId === layer.id
-                        ? previewAdjustments.adjustments
-                        : null
-                    }
-                    onSelect={onSelectLayer}
-                    onCommit={onTransform}
-                  />
-                );
-              })}
-
               {/* 选区 overlay 与提示点：渲染属于画布，状态不属于文档 */}
               <MaskOverlay url={maskUrl ?? ""} />
               {markers.map((marker) => (

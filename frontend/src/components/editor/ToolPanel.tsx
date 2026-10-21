@@ -11,6 +11,7 @@ import { CloseOutlined, LockOutlined, ThunderboltOutlined, ToolOutlined } from '
 
 import { invokeTool, listTools } from '@/api/tools'
 import type { ToolParamMeta } from '@/api/tools'
+import type { Layer } from '@/domain/layerDoc'
 
 /**
  * 不在这里出现的手势工具与顶栏重复项。
@@ -52,12 +53,14 @@ const HIDDEN_IN_ADVANCED = new Set([
 
 export default function ToolPanel({
   sessionId,
-  selected = null,
+  selected,
+  selectedLayer = null,
   onSelect,
   onQueuedRun,
 }: {
   sessionId: string
   selected?: string | null
+  selectedLayer?: Layer | null
   onSelect?: (name: string) => void
   onQueuedRun?: (runId: string, tool: string) => void
 }) {
@@ -67,7 +70,7 @@ export default function ToolPanel({
   const [localName, setLocalName] = useState<string | null>(null)
   const [values, setValues] = useState<Record<string, unknown>>({})
 
-  const toolName = selected ?? localName
+  const toolName = selected === undefined ? localName : selected
 
   const tool = useMemo(
     () => data?.items.find((item) => item.name === toolName) ?? null,
@@ -75,7 +78,7 @@ export default function ToolPanel({
   )
 
   const visibleParams = useMemo(
-    () => (tool?.params ?? []).filter((param) => !param.agent_hidden),
+    () => (tool?.params ?? []).filter((param) => !param.agent_hidden && param.name !== 'layer'),
     [tool],
   )
 
@@ -88,8 +91,13 @@ export default function ToolPanel({
     [data],
   )
 
+  const targetsLayer = tool?.params.some((param) => param.name === 'layer') ?? false
+  const invalidTarget = targetsLayer && (!selectedLayer || (tool?.name === 'set_layer_text' && selectedLayer.type !== 'text'))
   const invoke = useMutation({
-    mutationFn: () => invokeTool(tool!.name, sessionId, values),
+    mutationFn: () => invokeTool(tool!.name, sessionId, {
+      ...values,
+      ...(targetsLayer ? { layer: selectedLayer!.id } : {}),
+    }),
     onSuccess: (result) => {
       queryClient.setQueryData(['session', sessionId], result.session)
       void queryClient.invalidateQueries({ queryKey: ['history', sessionId] })
@@ -106,10 +114,12 @@ export default function ToolPanel({
    */
   useEffect(() => {
     invoke.reset()
-    setValues({})
-    // invoke 由 useMutation 返回、引用稳定，不必进依赖
+    setValues(tool?.name === 'set_layer_text' && selectedLayer?.type === 'text'
+      ? { text: selectedLayer.text?.text ?? '' }
+      : {})
+    // 同一工具切换目标也必须丢弃上一层草稿。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool?.name])
+  }, [tool?.name, selectedLayer?.id, selectedLayer?.text?.text])
 
   if (isLoading) return null
   if (!data || data.items.length === 0) return null
@@ -159,6 +169,12 @@ export default function ToolPanel({
         </button>
       </div>
 
+      {targetsLayer && (
+        <p className="m-0 text-[11px] text-slate-500">
+          {invalidTarget ? (tool.name === 'set_layer_text' ? '请先选择文字图层' : '请先选择目标图层') : `目标图层：${selectedLayer!.name}`}
+        </p>
+      )}
+
       {visibleParams.length === 0 ? (
         <p className="text-slate-400 m-0 text-[11px] leading-relaxed">
           该工具无需输入参数
@@ -183,6 +199,7 @@ export default function ToolPanel({
         size="small"
         icon={<ThunderboltOutlined />}
         loading={invoke.isPending}
+        disabled={invalidTarget}
         onClick={() => invoke.mutate()}
         className="h-7! text-xs! font-medium rounded!"
       >

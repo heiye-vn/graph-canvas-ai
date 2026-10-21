@@ -35,7 +35,11 @@ export default function PromptComposer() {
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submit()
+          if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault()
+            submit()
+          }
         }}
         rows={3}
         placeholder="描述你要的画面，例如：磨砂玻璃精华瓶立在亚克力台上，柔和顶光，白底电商主图"
