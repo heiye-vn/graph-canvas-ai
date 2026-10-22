@@ -145,7 +145,7 @@ export function reduceRunStream(
     case 'cot':
     case 'step':
     case 'plan':
-      // 本阶段后端不发这些；留着分支是为了 M8 / M9 接入时不用改这里
+      // 任务流不发这几类；对话轮（cot/step/plan）由 useCotStream 消费
       return prev
   }
 }

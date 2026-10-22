@@ -1,9 +1,10 @@
 /**
  * SSE 事件协议 —— 与后端 app/schemas/events.py 一一对应。
  *
- * 协议在 M2 一次性定死，后续只增不改：
- *   step / plan / cot 三类事件当前后端**不会发送**，但结构先在这里定义好，
- *   等 M8（多步计划）与 M9.1（思维链）直接启用，前端解析层不用返工。
+ * 协议在 M2 一次性定死，后续只增不改。两类流的职责：
+ *   /events/runs/{id}  排队任务：snapshot / progress / result / error / done
+ *   /events/agent/{id} 对话轮：snapshot / cot / step / plan / done
+ * cot 由 useCotStream 消费；任务流的折叠见 useRunStream。
  *
  * 传输约定（改任何一条都会让流卡住，别动）：
  *   1. 令牌走 query 参数 —— 浏览器原生 EventSource 发不了自定义请求头

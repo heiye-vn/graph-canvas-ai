@@ -9,19 +9,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  LayerNotFoundError,
-  addLayer,
   layerRect,
   layerSourceAssetId,
   referencedAssetIds,
-  removeLayer,
-  resolveLayer,
-  setActiveLayer,
-  setLayerVisible,
-  switchCurrentImage,
   topDown,
   topmostVisibleImageLayer,
-  updateLayer,
 } from '@/domain/layerDoc'
 import type { Layer, LayerDocument } from '@/domain/layerDoc'
 
@@ -79,15 +71,6 @@ describe('顺序语义', () => {
     expect(doc.layers[0].name).toBe('底')
     expect(topDown(doc).map((l) => l.name)).toEqual(['顶', '底'])
   })
-
-  it('addLayer 追加到最上层且不修改入参', () => {
-    const doc = docOf(imageLayer('底'))
-    const updated = addLayer(doc, imageLayer('新'))
-
-    expect(updated.layers).toHaveLength(2)
-    expect(updated.layers.at(-1)?.name).toBe('新')
-    expect(doc.layers).toHaveLength(1)
-  })
 })
 
 describe('默认图层', () => {
@@ -101,89 +84,6 @@ describe('默认图层', () => {
     expect(topmostVisibleImageLayer(docOf(textLayer('只有文字')))).toBeUndefined()
   })
 })
-
-describe('resolveLayer', () => {
-  it('按 id 精确匹配', () => {
-    const doc = docOf(imageLayer('A'), imageLayer('B'))
-    const target = doc.layers[1]
-
-    expect(resolveLayer(doc, target.id)).toBe(target)
-    expect(resolveLayer(doc, { id: target.id })).toBe(target)
-  })
-
-  it('按名称匹配取最上层', () => {
-    const doc = docOf(imageLayer('同名'), imageLayer('同名'))
-    expect(resolveLayer(doc, '同名')).toBe(doc.layers[1])
-  })
-
-  it('不传 ref 时走默认图层', () => {
-    const doc = docOf(imageLayer('隐藏', false), imageLayer('目标'))
-    expect(resolveLayer(doc).name).toBe('目标')
-  })
-
-  it('找不到就抛错，不悄悄回退到第一个图层', () => {
-    const doc = docOf(imageLayer('A'))
-    expect(() => resolveLayer(doc, '不存在')).toThrow(LayerNotFoundError)
-    expect(() => resolveLayer(docOf())).toThrow(LayerNotFoundError)
-  })
-})
-
-describe('增删改', () => {
-  it('removeLayer 顺带清空指向它的选中态', () => {
-    const target = imageLayer('待删')
-    const doc = setActiveLayer(docOf(target), target.id)
-
-    const updated = removeLayer(doc, target.id)
-    expect(updated.layers).toHaveLength(0)
-    expect(updated.active_layer_id).toBeNull()
-  })
-
-  it('操作不存在的图层会抛错', () => {
-    const doc = docOf(imageLayer('A'))
-    expect(() => removeLayer(doc, 'nope')).toThrow(LayerNotFoundError)
-    expect(() => updateLayer(doc, 'nope', { name: 'x' })).toThrow(LayerNotFoundError)
-    expect(() => setActiveLayer(doc, 'nope')).toThrow(LayerNotFoundError)
-  })
-
-  it('setLayerVisible 只动目标图层', () => {
-    const doc = docOf(imageLayer('A'), imageLayer('B'))
-    const updated = setLayerVisible(doc, doc.layers[0].id, false)
-
-    expect(updated.layers.map((l) => l.visible)).toEqual([false, true])
-  })
-})
-
-describe('切换当前图', () => {
-  it('目标可见、其余图像层隐藏，并把 active 指过去', () => {
-    const doc = docOf(imageLayer('第一张'), imageLayer('第二张'))
-    const updated = switchCurrentImage(doc, doc.layers[1].id)
-
-    expect(updated.layers.map((l) => l.visible)).toEqual([false, true])
-    expect(updated.active_layer_id).toBe(doc.layers[1].id)
-  })
-
-  it('不动文字层：切候选图不该顺手藏掉用户自己加的东西', () => {
-    const target = imageLayer('第二张')
-    const text = textLayer('文案')
-    const doc = docOf(imageLayer('第一张'), target, text)
-
-    const updated = switchCurrentImage(doc, target.id)
-
-    expect(byName(updated, '文案').visible).toBe(true)
-    expect(byName(updated, '第一张').visible).toBe(false)
-  })
-
-  it('目标不是图像层时报错', () => {
-    const doc = docOf(textLayer('文案'))
-    expect(() => switchCurrentImage(doc, doc.layers[0].id)).toThrow(/图像层/)
-  })
-})
-
-function byName(doc: LayerDocument, name: string): Layer {
-  const found = doc.layers.find((layer) => layer.name === name)
-  if (!found) throw new Error(`测试夹具里没有 ${name}`)
-  return found
-}
 
 describe('渲染辅助', () => {
   it('缺宽高时回退到画布尺寸，而不是画成 0', () => {

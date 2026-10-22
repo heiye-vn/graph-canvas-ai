@@ -9,7 +9,6 @@ import type { ThemeConfig } from 'antd'
 /** 与 index.css 对应的设计系统核心色值 */
 const BRAND = '#2563eb'
 const ACCENT = '#ec4899'
-const DARK = '#0f172a'
 
 export const antdTheme: ThemeConfig = {
   token: {
@@ -68,9 +67,6 @@ export const antdTheme: ThemeConfig = {
     },
   },
 }
-
-/** 局部深色主按钮主题（保留在特定提交场景） */
-export const darkPrimaryTheme: ThemeConfig = { token: { colorPrimary: DARK } }
 
 /** 强调色主题 */
 export const accentTheme: ThemeConfig = {

@@ -30,23 +30,6 @@ export interface ToolMeta {
   params: ToolParamMeta[]
 }
 
-export interface StepResult {
-  tool: string
-  args: Record<string, unknown>
-  ok: boolean
-  message: string
-  /** 这一步是否真的改了文档（false = 记了历史但画布没动） */
-  changed: boolean
-  /** 排队型工具提交出的任务 id（进度流凭它订阅） */
-  run_id?: string | null
-}
-
-export interface StepOutcome {
-  steps: StepResult[]
-  session: SessionOut
-  note: string | null
-}
-
 export interface InvokeResponse {
   tool: string
   message: string
@@ -56,13 +39,8 @@ export interface InvokeResponse {
 }
 
 export const listTools = () => apiGet<{ items: ToolMeta[] }>('/tools')
-
 export const invokeTool = (name: string, session_id: string, params: Record<string, unknown>) =>
   apiPost<InvokeResponse>(`/tools/${name}/invoke`, {
     session_id,
     params,
   })
-
-/** 一句自然语言 → 若干工具调用 → 新文档 */
-export const agentStep = (session_id: string, instruction: string) =>
-  apiPost<StepOutcome>('/agent/step', { session_id, instruction })

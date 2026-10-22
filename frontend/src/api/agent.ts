@@ -83,32 +83,3 @@ export interface TraceSpan {
 }
 
 export const getTrace = (runId: string) => apiGet<TraceSpan[]>(`/agent/runs/${runId}/trace`)
-
-export interface VersionMetrics {
-  prompt_version: string
-  plannings: number
-  validate_failed: number
-  reject_rate: number
-  avg_duration_ms: number
-  tokens_out: number
-}
-
-export interface DailyMetrics {
-  day: string
-  rounds: number
-  failed: number
-  steps: number
-}
-
-export interface AgentMetrics {
-  days: number
-  rounds_total: number
-  rejected_total: number
-  reject_rate: number
-  avg_steps_per_round: number
-  tool_fail_rate: number
-  daily: DailyMetrics[]
-  by_prompt_version: VersionMetrics[]
-}
-
-export const getMetrics = (days = 14) => apiGet<AgentMetrics>(`/agent/metrics?days=${days}`)

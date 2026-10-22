@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import io
 from typing import Any
 
 import boto3
@@ -99,19 +98,6 @@ def presign_put(
         Params={"Bucket": bucket_name(), "Key": key, "ContentType": content_type},
         ExpiresIn=ttl,
     )
-
-
-def load_image(key: str):
-    """以 Pillow Image 读取（M1 之后的工具链统一走这里）。"""
-    from PIL import Image  # 局部导入：核心路径不强制依赖 Pillow 的导入开销
-
-    return Image.open(io.BytesIO(get_object(key)))
-
-
-def save_image(image, key: str, format: str = "PNG") -> str:
-    buf = io.BytesIO()
-    image.save(buf, format=format)
-    return put_object(key, buf.getvalue(), content_type=f"image/{format.lower()}")
 
 
 def object_exists(key: str) -> bool:

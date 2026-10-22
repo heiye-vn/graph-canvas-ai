@@ -93,16 +93,6 @@ export interface LayerDocument {
   active_layer_id: string | null
 }
 
-export type LayerRef = string | { id?: string; name?: string } | null | undefined
-
-export class LayerNotFoundError extends Error {
-  constructor(ref?: unknown) {
-    const detail = ref === undefined || ref === null ? '' : `：${String(ref)}`
-    super(`找不到匹配的图层${detail}`)
-    this.name = 'LayerNotFoundError'
-  }
-}
-
 /** 从最上层到最底层 —— 图层面板渲染与「按名查找」都用这个顺序。 */
 export function topDown(doc: LayerDocument): Layer[] {
   return [...doc.layers].reverse()
@@ -111,101 +101,6 @@ export function topDown(doc: LayerDocument): Layer[] {
 /** 默认图层：最上层**可见**的 image 层。文字/形状层没有像素来源，不作默认目标。 */
 export function topmostVisibleImageLayer(doc: LayerDocument): Layer | undefined {
   return topDown(doc).find((layer) => layer.visible && layer.type === 'image')
-}
-
-/**
- * 定位图层 —— UI 选中态与工具调用的唯一入口。
- *
- * 找不到一律抛 LayerNotFoundError。**绝不悄悄回退到「第一个图层」**：
- * 那会让用户以为在改 A，实际改了 B。
- */
-export function resolveLayer(doc: LayerDocument, ref: LayerRef = null): Layer {
-  let wanted: string | undefined
-
-  if (ref && typeof ref === 'object') {
-    wanted = ref.id ?? ref.name
-  } else if (typeof ref === 'string') {
-    wanted = ref
-  }
-
-  if (!wanted) {
-    const fallback = topmostVisibleImageLayer(doc)
-    if (!fallback) throw new LayerNotFoundError()
-    return fallback
-  }
-
-  const byId = doc.layers.find((layer) => layer.id === wanted)
-  if (byId) return byId
-
-  const byName = topDown(doc).find((layer) => layer.name === wanted)
-  if (byName) return byName
-
-  throw new LayerNotFoundError(wanted)
-}
-
-function commit(base: LayerDocument, layers: Layer[], patch: Partial<LayerDocument> = {}) {
-  return { ...base, ...patch, layers }
-}
-
-/** 追加为最上层。 */
-export function addLayer(doc: LayerDocument, layer: Layer): LayerDocument {
-  return commit(doc, [...doc.layers, layer])
-}
-
-export function removeLayer(doc: LayerDocument, layerId: string): LayerDocument {
-  const remaining = doc.layers.filter((layer) => layer.id !== layerId)
-  if (remaining.length === doc.layers.length) throw new LayerNotFoundError(layerId)
-  return {
-    ...doc,
-    layers: remaining,
-    active_layer_id: doc.active_layer_id === layerId ? null : doc.active_layer_id,
-  }
-}
-
-export function updateLayer(
-  doc: LayerDocument,
-  layerId: string,
-  patch: Partial<Layer>,
-): LayerDocument {
-  let touched = false
-  const layers = doc.layers.map((layer) => {
-    if (layer.id !== layerId) return layer
-    touched = true
-    return { ...layer, ...patch }
-  })
-  if (!touched) throw new LayerNotFoundError(layerId)
-  return commit(doc, layers)
-}
-
-export function setLayerVisible(
-  doc: LayerDocument,
-  layerId: string,
-  visible: boolean,
-): LayerDocument {
-  return updateLayer(doc, layerId, { visible })
-}
-
-export function setActiveLayer(doc: LayerDocument, layerId: string | null): LayerDocument {
-  if (layerId !== null && !doc.layers.some((layer) => layer.id === layerId)) {
-    throw new LayerNotFoundError(layerId)
-  }
-  return { ...doc, active_layer_id: layerId }
-}
-
-/**
- * 把某张候选图切为「当前图」：它可见，其余**图像层**隐藏。
- *
- * 刻意只动 image 层 —— 面板上的文字层 / 形状层属于用户自己加的东西，
- * 切一张候选图不该顺手把它们也藏了。
- */
-export function switchCurrentImage(doc: LayerDocument, layerId: string): LayerDocument {
-  const target = resolveLayer(doc, layerId)
-  if (target.type !== 'image') throw new Error('当前图只能是图像层')
-
-  const layers = doc.layers.map((layer) =>
-    layer.type === 'image' ? { ...layer, visible: layer.id === target.id } : layer,
-  )
-  return commit(doc, layers, { active_layer_id: target.id })
 }
 
 export function layerSourceAssetId(layer: Layer): string | null {

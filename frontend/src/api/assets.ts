@@ -41,8 +41,6 @@ export const confirmUpload = (payload: { key: string; mime: string; size: number
 
 export const listAssets = () => apiGet<{ items: AssetOut[] }>('/assets')
 
-export const getAsset = (id: string) => apiGet<AssetOut>(`/assets/${id}`)
-
 export const deleteAsset = (id: string) => apiDelete<void>(`/assets/${id}`)
 
 /**

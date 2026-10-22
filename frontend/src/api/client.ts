@@ -1,16 +1,13 @@
 /**
  * HTTP 客户端。
  *
- * 两条 base 刻意分开：
- *   /api    —— 业务接口
- *   根路径  —— /health、/ready 探针与 /events（SSE），不挂业务前缀，
- *              便于反向代理单独关闭缓冲
+ * 只覆盖挂在 /api 下的业务接口。SSE（/events/*）与探针不走这里：
+ * EventSource 需要把令牌放在 query 上，由 domain/events.ts 直接拼根路径 URL。
  *
  * 访问令牌集中在这里注入，业务模块不需要各自拼 Authorization。
  */
 
 export const API_BASE = '/api'
-export const ROOT_BASE = ''
 
 const TOKEN_KEY = 'gca.access_token'
 
@@ -104,8 +101,4 @@ export function apiPatch<T>(path: string, body?: unknown): Promise<T> {
 
 export function apiDelete<T>(path: string): Promise<T> {
   return request<T>(`${API_BASE}${path}`, { method: 'DELETE' })
-}
-
-export function rootGet<T>(path: string, init?: RequestInit): Promise<T> {
-  return request<T>(`${ROOT_BASE}${path}`, init)
 }
