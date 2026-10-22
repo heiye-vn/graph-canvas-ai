@@ -41,6 +41,7 @@ import {
 import type { SessionOut } from "@/api/sessions";
 import { invokeTool, listTools } from "@/api/tools";
 import { getHistory, redoStep, undoStep } from "@/api/history";
+import { cancelRun } from "@/api/runs";
 import AdjustPanel from "@/components/editor/AdjustPanel";
 import CandidateStrip from "@/components/editor/CandidateStrip";
 import CanvasStage, { exportDocumentPng } from "@/components/editor/CanvasStage";
@@ -172,6 +173,8 @@ export default function EditorPage() {
   const [splitIncludeText, setSplitIncludeText] = useState(false);
   // 排队任务浮层：默认展开，可收成一个小胶囊（不挡画面）
   const [runCardOpen, setRunCardOpen] = useState(true);
+  // 用户主动取消的标记：同一终态要区分「失败」和「我点的取消」
+  const manualCancel = useRef(false);
   // 窄屏兜底：左 304 + 右 304 + 导航 56，窗口再窄画布就被挤没了
   const [narrowScreen, setNarrowScreen] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 1152,
@@ -305,11 +308,17 @@ export default function EditorPage() {
   useEffect(() => {
     if (!activeRun || !runStream.closed) return;
     if (runStream.status === "failed" || runStream.status === "cancelled") {
-      message.error(
-        runStream.error
-          ? `处理失败：${runStream.error}`
-          : "处理失败或已取消，画布没有改动",
-      );
+      // 用户自己点的取消不该报「处理失败」——两者都走 cancelled 终态
+      if (manualCancel.current) {
+        manualCancel.current = false;
+        message.info("已取消，画布没有改动");
+      } else {
+        message.error(
+          runStream.error
+            ? `处理失败：${runStream.error}`
+            : "处理失败或已取消，画布没有改动",
+        );
+      }
       setActiveRun(null);
     }
   }, [activeRun, runStream]);
@@ -318,6 +327,22 @@ export default function EditorPage() {
     setActiveRun({ id: runId, tool });
     setRunCardOpen(true);
   };
+
+  /** 排队任务可能跑几分钟（Provider 最慢近 190s），必须给一个退出的口子。 */
+  const cancelQueuedRun = useMutation({
+    mutationFn: (id: string) => cancelRun(id),
+    onError: (error: Error) => {
+      manualCancel.current = false;
+      message.error(error.message || "取消失败，请稍后重试");
+    },
+  });
+
+  function cancelActiveRun() {
+    if (!activeRun) return;
+    // 先置标记再发请求：cancelled 帧可能比 HTTP 响应先到，反了就误报「处理失败」
+    manualCancel.current = true;
+    cancelQueuedRun.mutate(activeRun.id);
+  }
 
   /** 进度卡标题：用工具的中文名，别只显示一个百分比 */
   const activeToolLabel = useMemo(
@@ -922,13 +947,23 @@ export default function EditorPage() {
                       <span className="text-[11px] font-medium text-zinc-300">
                         {activeToolLabel ? `${activeToolLabel}处理中` : "AI 处理中"}
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => setRunCardOpen(false)}
-                        className="cursor-pointer text-[11px] text-zinc-500 transition-colors hover:text-zinc-300"
-                      >
-                        收起
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={cancelActiveRun}
+                          disabled={cancelQueuedRun.isPending}
+                          className="cursor-pointer text-[11px] text-zinc-500 transition-colors hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {cancelQueuedRun.isPending ? "取消中…" : "取消"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRunCardOpen(false)}
+                          className="cursor-pointer text-[11px] text-zinc-500 transition-colors hover:text-zinc-300"
+                        >
+                          收起
+                        </button>
+                      </div>
                     </div>
                     <RunProgress
                       status={runStream.status}

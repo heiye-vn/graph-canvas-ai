@@ -14,6 +14,7 @@ import {
   hasAdjustments,
   NEUTRAL_ADJUSTMENTS,
   sharpenPixels,
+  vignettePixels,
 } from '@/domain/pixels'
 import type { Adjustments } from '@/domain/layerDoc'
 
@@ -208,7 +209,16 @@ describe('新增调色参数', () => {
     )
   })
 
-  it('晕影：四角变暗、中心不变', () => {
+  it('颜色链路不再处理晕影（交给最后一步）', () => {
+    const data = new Uint8ClampedArray([200, 200, 200, 255])
+    expect(Array.from(adjustPixels(data, adj({ vignette: 100 })))).toEqual([
+      200, 200, 200, 255,
+    ])
+  })
+})
+
+describe('vignettePixels', () => {
+  it('四角变暗、中心不变', () => {
     const size = 8
     const data = new Uint8ClampedArray(size * size * 4)
     for (let i = 0; i < data.length; i += 4) {
@@ -217,7 +227,7 @@ describe('新增调色参数', () => {
       data[i + 2] = 200
       data[i + 3] = 255
     }
-    const out = adjustPixels(data, adj({ vignette: 80 }), size, size)
+    const out = vignettePixels(data, size, size, 80)
     const at = (x: number, y: number) => out[(y * size + x) * 4]
     // 8px 图没有「正中心」像素，最近的四格仍有极轻微压暗
     expect(at(4, 4)).toBeGreaterThan(190)
@@ -225,11 +235,23 @@ describe('新增调色参数', () => {
     expect(at(7, 7)).toBeLessThan(at(4, 4))
   })
 
-  it('不传尺寸时跳过晕影（单测不需要构造坐标系）', () => {
+  it('零强度或没有尺寸时原样返回（不拷贝）', () => {
     const data = new Uint8ClampedArray([200, 200, 200, 255])
-    expect(Array.from(adjustPixels(data, adj({ vignette: 100 })))).toEqual([
-      200, 200, 200, 255,
-    ])
+    expect(vignettePixels(data, 1, 1, 0)).toBe(data)
+    expect(vignettePixels(data, 0, 0, 100)).toBe(data)
+  })
+
+  it('不动 alpha', () => {
+    const size = 4
+    const data = new Uint8ClampedArray(size * size * 4)
+    for (let i = 0; i < data.length; i += 4) {
+      data[i] = 180
+      data[i + 1] = 180
+      data[i + 2] = 180
+      data[i + 3] = i % 8 === 0 ? 0 : 255
+    }
+    const out = vignettePixels(data, size, size, 100)
+    for (let i = 3; i < data.length; i += 4) expect(out[i]).toBe(data[i])
   })
 })
 

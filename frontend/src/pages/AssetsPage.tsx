@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Spin } from 'antd'
+import { Alert, Button, Spin, message } from 'antd'
 import { PlusOutlined } from '@ant-design/icons'
 
 import { deleteAsset, listAssets } from '@/api/assets'
@@ -46,6 +46,9 @@ export default function AssetsPage() {
   const remove = useMutation({
     mutationFn: (id: string) => deleteAsset(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['assets'] }),
+    // 仍被会话或历史引用的素材，后端返回 409 + 中文原因。
+    // 不提示的话用户只会看到「点了删除，列表没变」—— 静默失败比报错更糟。
+    onError: (error: Error) => message.error(error.message || '删除失败，请稍后重试'),
   })
 
   const items = data?.items ?? []

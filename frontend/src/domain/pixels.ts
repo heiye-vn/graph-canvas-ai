@@ -51,14 +51,13 @@ const STEP = 2.55
 /**
  * 按 RGBA 顺序排列的像素序列做非破坏性调色，返回**新的**数组（不改入参）。
  *
- * width/height 只服务晕影（需要知道像素在画面里的位置）。
- * 不传时跳过晕影 —— 单测不需要为了测颜色去构造坐标系。
+ * 只管颜色链路（对比 → 明度 → 高光/阴影 → 色温/色调 → 饱和 → 自然饱和）；
+ * 锐化/清晰度是邻域运算、晕影要落在它们之后，分别由 `sharpenPixels` 与
+ * `vignettePixels` 承接 —— 与后端 `_adjust_numpy` 的分段完全同序。
  */
 export function adjustPixels(
   data: Uint8ClampedArray,
   adjustments: Adjustments,
-  width = 0,
-  height = 0,
 ): Uint8ClampedArray {
   const out = new Uint8ClampedArray(data.length)
 
@@ -73,14 +72,8 @@ export function adjustPixels(
   const tint = adjustments.tint / 100
   const saturation = adjustments.saturation / 100
   const vibrance = adjustments.vibrance / 100
-  const vignette = adjustments.vignette / 100
 
-  const hasVignette = vignette > 0 && width > 0 && height > 0
-  const centerX = (width - 1) / 2
-  const centerY = (height - 1) / 2
-  const farthest = Math.hypot(centerX, centerY) || 1
-
-  for (let i = 0, pixel = 0; i < data.length; i += 4, pixel += 1) {
+  for (let i = 0; i < data.length; i += 4) {
     let r = data[i]
     let g = data[i + 1]
     let b = data[i + 2]
@@ -128,20 +121,45 @@ export function adjustPixels(
       g += (g - average) * weight
       b += (b - average) * weight
     }
-    if (hasVignette) {
-      const x = pixel % width
-      const y = (pixel / width) | 0
-      const distance = Math.hypot(x - centerX, y - centerY) / farthest
-      const shade = 1 - vignette * Math.pow(Math.min(1, distance), 1.6)
-      r *= shade
-      g *= shade
-      b *= shade
-    }
 
     out[i] = clamp(r)
     out[i + 1] = clamp(g)
     out[i + 2] = clamp(b)
     out[i + 3] = data[i + 3] // alpha 原样搬运 —— 透明区永远透明
+  }
+  return out
+}
+
+/**
+ * 晕影：整段链路里**最后**一步，必须排在锐化/清晰度之后。
+ *
+ * 与后端 `edits/render.py::_adjust_numpy` 的结尾同序。顺序反过来的差别很具体：
+ * 先乘暗角再锐化，unsharp 会把暗角边缘的反差再放大一次 —— 画布上看到的
+ * 与拍平喂给模型的那张图就对不上，而且只在「同时开锐化和晕影」时暴露。
+ */
+export function vignettePixels(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  strength: number,
+): Uint8ClampedArray {
+  // 后端 schema 限定 0~100；负值/零值都不做暗角（与旧行为一致）
+  if (!(strength > 0) || width <= 0 || height <= 0) return data
+  const amount = strength / 100
+  const out = new Uint8ClampedArray(data)
+  const centerX = (width - 1) / 2
+  const centerY = (height - 1) / 2
+  const farthest = Math.hypot(centerX, centerY) || 1
+
+  for (let i = 0, pixel = 0; i < data.length; i += 4, pixel += 1) {
+    const x = pixel % width
+    const y = (pixel / width) | 0
+    const distance = Math.hypot(x - centerX, y - centerY) / farthest
+    const shade = 1 - amount * Math.pow(Math.min(1, distance), 1.6)
+    out[i] = clamp(data[i] * shade)
+    out[i + 1] = clamp(data[i + 1] * shade)
+    out[i + 2] = clamp(data[i + 2] * shade)
+    // alpha 不参与暗角：透明区乘上系数也还是透明
   }
   return out
 }
