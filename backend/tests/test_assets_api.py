@@ -92,6 +92,83 @@ def test_upload_full_flow(client: TestClient, user: dict):
     assert client.get(f"/api/assets/{asset['id']}", headers=auth(user)).status_code == 404
 
 
+def _insert_foreign_reference(kind: str, *, session_id: str, asset_id: str) -> None:
+    """直接落一条「别人的会话引用了我的素材」——API 不允许这么干，只能模拟脏数据。"""
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
+    from app.config import get_settings
+    from app.models import EditHistory, SessionAsset
+
+    async def main() -> None:
+        engine = create_async_engine(get_settings().database_url)
+        try:
+            async with AsyncSession(engine) as db:
+                if kind == "link":
+                    db.add(
+                        SessionAsset(
+                            session_id=uuid.UUID(session_id), asset_id=uuid.UUID(asset_id)
+                        )
+                    )
+                else:
+                    db.add(
+                        EditHistory(
+                            session_id=uuid.UUID(session_id),
+                            seq=10_000,
+                            tool=None,
+                            label="foreign",
+                            changed=True,
+                            before={},
+                            after={"layers": [{"source": {"asset_id": asset_id}}]},
+                            params={},
+                        )
+                    )
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(main())
+
+
+def _other_user(client: TestClient) -> dict:
+    r = client.post(
+        "/api/auth/register",
+        json={"email": unique_email(), "password": "Strong-Pass-123"},
+    )
+    assert r.status_code == 201
+    return {"token": r.json()["token"]["access_token"], "id": r.json()["user"]["id"]}
+
+
+def _foreign_session(client: TestClient, other: dict) -> dict:
+    asset = upload_one(client, other, make_png(), "image/png").json()
+    r = client.post(
+        "/api/edit-sessions", json={"asset_ids": [asset["id"]]}, headers=auth(other)
+    )
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def test_delete_asset_ignores_foreign_session_link(client: TestClient, user: dict):
+    """别人的会话关联不该成为锁死我素材的杠杆。"""
+    mine = upload_one(client, user, make_png(), "image/png").json()
+    other = _other_user(client)
+    foreign = _foreign_session(client, other)
+    _insert_foreign_reference("link", session_id=foreign["id"], asset_id=mine["id"])
+
+    assert client.delete(f"/api/assets/{mine['id']}", headers=auth(user)).status_code == 204
+
+
+def test_delete_asset_ignores_foreign_history_reference(client: TestClient, user: dict):
+    """历史快照扫描同样只看自己的会话，否则全表 JSON 扫描既慢又会被别人卡住。"""
+    mine = upload_one(client, user, make_png(), "image/png").json()
+    other = _other_user(client)
+    foreign = _foreign_session(client, other)
+    _insert_foreign_reference("history", session_id=foreign["id"], asset_id=mine["id"])
+
+    assert client.delete(f"/api/assets/{mine['id']}", headers=auth(user)).status_code == 204
+
+
 def test_confirm_is_idempotent(client: TestClient, user: dict):
     """网络重试会重复 confirm，必须幂等——否则同一个 key 会落两条记录。"""
     data = make_png()

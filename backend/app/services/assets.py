@@ -227,14 +227,27 @@ async def get_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid.UU
 
 async def delete_asset(session: AsyncSession, user_id: uuid.UUID, asset_id: uuid.UUID) -> None:
     asset = await get_asset(session, user_id, asset_id)
+    # 引用检查只看自己的会话：别人的脏引用不该锁死我的素材（也避免全表 JSON 扫描）
+    owned_sessions = select(EditSession.id).where(EditSession.user_id == user_id)
     linked = await session.scalar(
-        select(SessionAsset.id).where(SessionAsset.asset_id == asset_id).limit(1)
+        select(SessionAsset.id)
+        .where(
+            SessionAsset.asset_id == asset_id,
+            SessionAsset.session_id.in_(owned_sessions),
+        )
+        .limit(1)
     )
     if linked is None:
         # 手动替换文档可能没有关联行；历史的 before / after（包括 redo 分支）也必须保留。
         snapshots = await session.execute(
             union_all(
-                select(EditSession.doc), select(EditHistory.before), select(EditHistory.after)
+                select(EditSession.doc).where(EditSession.user_id == user_id),
+                select(EditHistory.before)
+                .join(EditSession, EditSession.id == EditHistory.session_id)
+                .where(EditSession.user_id == user_id),
+                select(EditHistory.after)
+                .join(EditSession, EditSession.id == EditHistory.session_id)
+                .where(EditSession.user_id == user_id),
             )
         )
         referenced = any(
