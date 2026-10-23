@@ -550,11 +550,24 @@ class AddImageLayerParams(BaseModel):
 
 
 async def add_image_layer(params: AddImageLayerParams, ctx: ToolContext) -> ToolResult:
-    from app.schemas.layer_doc import Layer
+    from fastapi import HTTPException
 
-    asset_id = params.asset_id or ctx.pinned.get("asset_id")
-    if not asset_id:
+    from app.schemas.layer_doc import Layer
+    from app.services import assets as asset_service
+
+    raw_asset_id = params.asset_id or ctx.pinned.get("asset_id")
+    if not raw_asset_id:
         raise ToolError("缺少素材：请先在界面上选一张图", code="no_asset")
+    try:
+        asset_id = uuid.UUID(str(raw_asset_id))
+    except (TypeError, ValueError) as exc:
+        raise ToolError("素材 id 不合法，请重新选择素材", code="bad_asset") from exc
+    # 引用写进文档前先验归属：越权/不存在的 id 会让拍平静默少一层
+    if ctx.db is not None:
+        try:
+            await asset_service.get_asset(ctx.db, ctx.user_id, asset_id)
+        except HTTPException as exc:
+            raise ToolError("素材不存在或无权访问", code="asset_not_found") from exc
 
     doc = L.add_layer(
         ctx.doc,

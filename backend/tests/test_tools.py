@@ -170,6 +170,15 @@ async def test_add_image_layer_takes_asset_from_pinned_context():
     assert result.doc.layers[-1].source.asset_id == asset_id
 
 
+async def test_add_image_layer_rejects_malformed_asset_id():
+    """模型/接口塞进来的不是 UUID 时，应当是用户可读的工具错误，不是 500。"""
+    with pytest.raises(ToolError) as exc:
+        await tool_exec.invoke(
+            "add_image_layer", {}, ctx_of(doc_with(), asset_id="not-a-uuid")
+        )
+    assert exc.value.code == "bad_asset"
+
+
 async def test_reorder_layer_bounds():
     doc = doc_with(image_layer("A"), image_layer("B"))
     with pytest.raises(ToolError):

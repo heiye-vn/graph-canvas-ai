@@ -212,3 +212,20 @@ def test_add_image_layer_uses_ui_supplied_asset(client: TestClient, user: dict):
     layers = r.json()["session"]["doc"]["layers"]
     assert len(layers) == 2
     assert layers[-1]["name"] == "新品图"
+
+
+def test_add_image_layer_rejects_foreign_asset(client: TestClient, user: dict):
+    """不能把别人的素材 id 写进自己的文档 —— 拍平时会变成一张静默缺失的图层。"""
+    other = client.post(
+        "/api/auth/register",
+        json={"email": f"test_{uuid.uuid4().hex[:12]}@example.com", "password": "Strong-Pass-123"},
+    ).json()
+    other_user = {"token": other["token"]["access_token"], "id": other["user"]["id"]}
+    foreign_asset = upload_asset(client, other_user)
+
+    session = make_session(client, user)
+    r = invoke(
+        client, user, "add_image_layer", session["id"], {"asset_id": foreign_asset["id"]}
+    )
+    assert r.status_code == 422
+    assert "素材不存在" in r.json()["detail"]
