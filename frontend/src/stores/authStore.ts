@@ -2,7 +2,7 @@ import { create } from 'zustand'
 
 import { fetchMe, login, register } from '@/api/auth'
 import type { UserOut } from '@/api/auth'
-import { tokenStore } from '@/api/client'
+import { ApiError, tokenStore } from '@/api/client'
 import { clearUserQueryCache } from '@/lib/queryClient'
 
 let authRevision = 0
@@ -33,10 +33,13 @@ export const useAuthStore = create<AuthState>((set) => ({
       const user = await fetchMe()
       if (revision !== authRevision || token !== tokenStore.get()) return
       set({ user, loading: false })
-    } catch {
+    } catch (err) {
       if (revision !== authRevision || token !== tokenStore.get()) return
-      tokenStore.set(null)
-      clearUserQueryCache()
+      // 只有令牌被拒才登出；服务端 5xx / 断网时保留 token，恢复后刷新即可
+      if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+        tokenStore.set(null)
+        clearUserQueryCache()
+      }
       set({ user: null, loading: false })
     }
   },

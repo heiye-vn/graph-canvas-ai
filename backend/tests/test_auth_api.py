@@ -66,6 +66,28 @@ def test_login_unknown_email_returns_same_message(client: TestClient):
     assert r.json()["detail"] == "邮箱或密码错误"
 
 
+def test_login_unknown_email_still_verifies_password(client: TestClient, monkeypatch):
+    """未知邮箱也要跑一次 bcrypt，否则响应时间差就能枚举账号。"""
+    from app.routers import auth as auth_router
+
+    hashes: list[str] = []
+    real = auth_router.verify_password
+
+    def spy(password: str, password_hash: str) -> bool:
+        hashes.append(password_hash)
+        return real(password, password_hash)
+
+    monkeypatch.setattr(auth_router, "verify_password", spy)
+
+    r = client.post(
+        "/api/auth/login",
+        json={"email": unique_email("test_unknown_"), "password": "whatever-123"},
+    )
+    assert r.status_code == 401
+    assert len(hashes) == 1
+    assert hashes[0].startswith("$2"), "必须用真实 bcrypt 哈希陪跑，不能短路"
+
+
 def test_weak_password_rejected_by_schema(client: TestClient):
     r = client.post("/api/auth/register", json={"email": unique_email(), "password": "123"})
     assert r.status_code == 422

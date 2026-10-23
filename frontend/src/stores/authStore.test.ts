@@ -3,7 +3,7 @@ import { QueryClient } from '@tanstack/react-query'
 
 vi.mock('@/api/auth', () => ({ fetchMe: vi.fn(), login: vi.fn(), register: vi.fn() }))
 import { fetchMe, login, register } from '@/api/auth'
-import { tokenStore } from '@/api/client'
+import { ApiError, tokenStore } from '@/api/client'
 import { useAuthStore } from './authStore'
 
 const user = (id: string) => ({ id, email: `${id}@example.com`, display_name: null, created_at: '' })
@@ -66,6 +66,28 @@ describe('账号查询隔离', () => {
     unsubscribe()
     expect(cacheAtPublish).toBeUndefined()
     expect(useAuthStore.getState()).toMatchObject({ user: user('new'), loading: false })
+  })
+
+  it('bootstrap 遇到服务端故障时保留 token', async () => {
+    useAuthStore.setState({ user: null, loading: true })
+    vi.mocked(fetchMe).mockRejectedValue(new ApiError(500, 'boom'))
+    await useAuthStore.getState().bootstrap()
+    expect(tokenStore.get()).toBe('old')
+    expect(useAuthStore.getState()).toMatchObject({ user: null, loading: false })
+  })
+
+  it('bootstrap 遇到网络失败时保留 token', async () => {
+    useAuthStore.setState({ user: null, loading: true })
+    vi.mocked(fetchMe).mockRejectedValue(new TypeError('Failed to fetch'))
+    await useAuthStore.getState().bootstrap()
+    expect(tokenStore.get()).toBe('old')
+  })
+
+  it.each([401, 403])('bootstrap 遇到 %s 才清 token', async (status) => {
+    vi.mocked(fetchMe).mockRejectedValue(new ApiError(status, 'denied'))
+    await useAuthStore.getState().bootstrap()
+    expect(tokenStore.get()).toBeNull()
+    expect(useAuthStore.getState()).toMatchObject({ user: null, loading: false })
   })
 
   it('退出后迟到的 bootstrap 不得恢复旧用户', async () => {

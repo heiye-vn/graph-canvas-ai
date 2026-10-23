@@ -13,6 +13,7 @@ import base64
 import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
 from typing import Any
 
 import bcrypt
@@ -40,6 +41,12 @@ def verify_password(password: str, password_hash: str) -> bool:
     except (ValueError, TypeError):
         # 哈希值损坏或不是合法 bcrypt 串：按「校验失败」处理，不暴露内部错误
         return False
+
+
+@lru_cache(maxsize=1)
+def dummy_password_hash() -> str:
+    """真实 bcrypt 哈希，给「用户不存在」的登录陪跑，消除计时侧信道。"""
+    return hash_password(uuid.uuid4().hex)
 
 
 def create_access_token(user_id: uuid.UUID | str) -> str:

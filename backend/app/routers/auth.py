@@ -9,7 +9,12 @@ from app.db import get_session
 from app.deps import get_current_user
 from app.models import User
 from app.schemas.auth import AuthResponse, LoginRequest, RegisterRequest, TokenResponse, UserOut
-from app.services.security import create_access_token, hash_password, verify_password
+from app.services.security import (
+    create_access_token,
+    dummy_password_hash,
+    hash_password,
+    verify_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -54,8 +59,11 @@ async def login(
     email = payload.email.lower()
     user = await session.scalar(select(User).where(User.email == email))
 
-    # 用户不存在时也走一次密码校验（用固定哈希），避免通过响应时间枚举账号
-    if user is None or not verify_password(payload.password, user.password_hash):
+    # 用户不存在时也走一次密码校验（用占位哈希），避免通过响应时间枚举账号。
+    # 不能写成 `user is None or verify(...)`：短路会让缺失用户跳过 bcrypt。
+    password_hash = user.password_hash if user is not None else dummy_password_hash()
+    valid = verify_password(payload.password, password_hash)
+    if user is None or not valid:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="邮箱或密码错误")
 
     return AuthResponse(token=_token_response(user.id), user=UserOut.model_validate(user))
