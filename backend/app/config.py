@@ -22,6 +22,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 _BACKEND_ENV = Path(__file__).resolve().parent.parent / ".env"
 _ROOT_ENV = Path(__file__).resolve().parents[2] / ".env"
 
+DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -83,6 +85,8 @@ class Settings(BaseSettings):
     # ---- Agent（M4）----
     # OpenAI 兼容端点；国内网络默认走百炼的兼容模式，换自建/其它厂商只改这一个变量
     llm_base_url: str | None = None
+    # 自定义端点的 Key；缺省回退 DASHSCOPE_API_KEY（老配置不改也能跑）
+    llm_api_key: str | None = None
     llm_temperature: float = 0.0
 
     # ---- 可观测：可选 Langfuse 旁路导出（不配则完全跳过，本地 trace 表照常）----
@@ -112,9 +116,14 @@ class Settings(BaseSettings):
         与 `require_dashscope_key` 同一口径：**缺配置立即失败**，
         不静默降级到「假装理解了」的假规划。
         """
-        key = self.require_dashscope_key()
-        base = self.llm_base_url or "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        return base, key, self.planner_model
+        key = self.llm_api_key or self.dashscope_api_key
+        if not key:
+            raise RuntimeError(
+                "LLM_API_KEY 未配置：Agent 规划需要调用 OpenAI 兼容模型。"
+                "用百炼时填 DASHSCOPE_API_KEY（或 LLM_API_KEY），"
+                "换自建/三方端点时填 LLM_API_KEY 并设置 LLM_BASE_URL。"
+            )
+        return self.llm_base_url or DEFAULT_LLM_BASE_URL, key, self.planner_model
 
     def require_dashscope_key(self) -> str:
         """规划/百炼生图链路真正要用 Key 时才校验，避免 mock 模式下被迫填一堆空变量。"""
@@ -140,11 +149,6 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     # 单元测试要换配置时显式 get_settings.cache_clear()
     return Settings()
-
-
-def reload_settings() -> Settings:
-    get_settings.cache_clear()
-    return get_settings()
 
 
 def preflight_settings() -> None:

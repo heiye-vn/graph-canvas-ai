@@ -17,7 +17,7 @@ from langchain_openai import ChatOpenAI
 
 # prompt 正文与版本号住在 prompts.py（M9.3 起版本化，改文案必须升 PROMPT_VERSION）
 from app.agent.prompts import SYSTEM_PROMPT
-from app.config import get_settings
+from app.config import DEFAULT_LLM_BASE_URL, get_settings
 
 # ---- CoT 攒批（M9.1 补丁）------------------------------------------------
 # astream 是逐 token 的：一个 chunk 就 emit 一次，会让「思考过程（N 条）」
@@ -47,7 +47,7 @@ def _describe_llm_error(exc: Exception, *, model: str, base_url: str) -> str:
     import openai
 
     if isinstance(exc, openai.AuthenticationError):
-        return "规划模型鉴权失败（401）：DASHSCOPE_API_KEY 无效或已过期。"
+        return "规划模型鉴权失败（401）：LLM_API_KEY / DASHSCOPE_API_KEY 无效或已过期。"
     if isinstance(exc, openai.NotFoundError):
         return (
             f"规划模型不存在（404）：model={model} @ {base_url}。"
@@ -112,16 +112,18 @@ async def _plan_stream(
     functions: list[dict[str, Any]],
     emit,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    try:
-        base_url, _api_key, model = get_settings().require_llm_config()
-    except RuntimeError as exc:
-        # 缺 Key 也是「规划不了」的一种：同样给人话，而不是落进 500
-        raise PlannerError(str(exc)) from exc
+    settings = get_settings()
+    model = settings.planner_model
+    base_url = settings.llm_base_url or DEFAULT_LLM_BASE_URL
 
     # stream_usage：流式也要拿到 token 用量（M9.3 trace 需要）。
     # 它是 ChatOpenAI 的模型字段，不是请求参数 —— 放 bind_tools 会被当成
     # 未知参数发给服务端（中转站直接 400）
-    llm = get_chat_model().bind_tools(functions)
+    try:
+        llm = get_chat_model().bind_tools(functions)
+    except RuntimeError as exc:
+        # 缺 Key 也是「规划不了」的一种：同样给人话，而不是落进 500
+        raise PlannerError(str(exc)) from exc
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),
         HumanMessage(content=f"{doc_summary}\n\n用户要求：{instruction}"),

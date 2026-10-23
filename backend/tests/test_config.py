@@ -58,6 +58,27 @@ def test_require_dashscope_key_is_lazy():
     assert _build(dashscope_api_key="sk-x").require_dashscope_key() == "sk-x"
 
 
+def test_llm_key_prefers_custom_provider_key():
+    """换自建/三方 OpenAI 兼容端点时，不该被迫填百炼的 Key。"""
+    s = _build(llm_api_key="sk-custom", dashscope_api_key=None)
+    _base, key, _model = s.require_llm_config()
+    assert key == "sk-custom"
+
+
+def test_llm_key_falls_back_to_dashscope():
+    """老配置（只填 DASHSCOPE_API_KEY）必须继续可用。"""
+    s = _build(llm_api_key=None, dashscope_api_key="sk-dash")
+    assert s.require_llm_config()[1] == "sk-dash"
+
+
+def test_llm_key_error_names_both_vars():
+    """报错要给出两条路：自定义端点用 LLM_API_KEY，百炼用 DASHSCOPE_API_KEY。"""
+    with pytest.raises(RuntimeError) as exc:
+        _build(llm_api_key=None, dashscope_api_key=None).require_llm_config()
+    assert "LLM_API_KEY" in str(exc.value)
+    assert "DASHSCOPE_API_KEY" in str(exc.value)
+
+
 def test_preflight_lists_missing_vars(monkeypatch):
     """启动自检失败时必须列出缺哪个变量——一句「缺配置」等于让人盲猜。"""
     from app import config
