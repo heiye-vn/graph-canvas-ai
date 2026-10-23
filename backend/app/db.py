@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -75,12 +74,5 @@ async def dispose_engine() -> None:
     global _engine, _session_factory
     if _engine is not None:
         await _engine.dispose()
-    _engine = None
-    _session_factory = None
-
-
-def reset_db_state(**_: Any) -> None:
-    """测试夹具钩子：清掉进程内缓存的 engine/session。"""
-    global _engine, _session_factory
     _engine = None
     _session_factory = None

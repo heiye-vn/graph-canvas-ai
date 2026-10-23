@@ -12,14 +12,7 @@ from PIL import Image
 
 from app.edits.mask import overlay_png
 from app.edits.ocr import TextBox, detect_text
-from app.edits.split import (
-    EmptyCut,
-    cut_object,
-    fill_background,
-    grow_mask,
-    punch,
-    remove_text,
-)
+from app.edits.split import fill_background, grow_mask, punch, remove_text
 from app.schemas.layer_doc import LayerDocument
 from app.services.split import build_split_document
 
@@ -52,30 +45,16 @@ def _doc() -> LayerDocument:
 # ------------------------------------------------------------------ 像素原语
 
 
-def test_cut_object_and_punch_roundtrip():
+def test_punch_makes_masked_pixels_transparent():
     source = _png(Image.new("RGBA", SIZE, (10, 200, 30, 255)))
     mask = Image.new("L", SIZE, 0)
     for y in range(10, 20):
         for x in range(20, 30):
             mask.putpixel((x, y), 255)
-    mask_bytes = _png(mask)
 
-    cut, left, top, width, height = cut_object(source, mask_bytes)
-    assert (left, top, width, height) == (20, 10, 10, 10)
-    cut_img = Image.open(io.BytesIO(cut))
-    assert cut_img.size == (10, 10)
-    assert cut_img.getpixel((5, 5))[3] == 255
-
-    punched = Image.open(io.BytesIO(punch(source, mask_bytes)))
+    punched = Image.open(io.BytesIO(punch(source, _png(mask))))
     assert punched.getpixel((25, 15))[3] == 0  # 遮罩内透明
     assert punched.getpixel((0, 0))[3] == 255  # 遮罩外保留
-
-
-def test_cut_object_empty_mask_raises():
-    source = _png(Image.new("RGBA", SIZE, (0, 0, 0, 255)))
-    mask = _png(Image.new("L", SIZE, 0))
-    with pytest.raises(EmptyCut):
-        cut_object(source, mask)
 
 
 def test_grow_mask_expands_alpha_only():

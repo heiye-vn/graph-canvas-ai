@@ -6,8 +6,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import boto3
 from botocore.config import Config
 from botocore.exceptions import ClientError
@@ -106,7 +104,3 @@ def object_exists(key: str) -> bool:
     except Exception:  # noqa: BLE001
         return False
     return True
-
-
-def _health_detail() -> dict[str, Any]:
-    return {"bucket": bucket_name(), "endpoint": get_settings().s3_endpoint}

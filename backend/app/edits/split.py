@@ -11,35 +11,12 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 from app.edits.mask import overlay_png, to_luma
 from app.edits.ocr import TextBox
-
-
-class EmptyCut(Exception):
-    """遮罩没有覆盖到任何像素。"""
-
-
-def mask_hash(mask: bytes) -> str:
-    return hashlib.sha256(to_luma(mask).tobytes()).hexdigest()[:16]
-
-
-def cut_object(source: bytes, mask: bytes) -> tuple[bytes, int, int, int, int]:
-    """按遮罩抠出物体，返回裁切后的 PNG 与画布坐标 (left, top, width, height)。"""
-    image = Image.open(io.BytesIO(source)).convert("RGBA")
-    luma = to_luma(mask, image.size)
-    alpha = ImageChops.multiply(image.getchannel("A"), luma)
-    image.putalpha(alpha)
-    box = luma.getbbox()
-    if box is None:
-        raise EmptyCut
-    cropped = image.crop(box)
-    left, top, right, bottom = box
-    return _png(cropped), left, top, right - left, bottom - top
 
 
 def punch(source: bytes, mask: bytes, *, x: float = 0, y: float = 0) -> bytes:

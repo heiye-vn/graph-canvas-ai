@@ -10,7 +10,6 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
@@ -60,8 +59,3 @@ async def get_user_from_header_or_query(
     return await user_from_token(
         credentials.credentials if credentials else token, session
     )
-
-
-async def get_user_id_by_email(session: AsyncSession, email: str) -> UUID | None:
-    result = await session.execute(select(User.id).where(User.email == email))
-    return result.scalar_one_or_none()
