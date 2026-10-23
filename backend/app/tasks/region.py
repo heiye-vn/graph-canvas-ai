@@ -21,7 +21,7 @@ from app.edits.mask import MaskSizeMismatch, apply_masked
 from app.models import SessionAsset, ToolRun
 from app.providers import get_image_provider
 from app.providers.base import ProviderError
-from app.schemas.events import DoneEvent, ResultEvent
+from app.schemas.events import ResultEvent
 from app.schemas.layer_doc import LayerDocument
 from app.services import assets as asset_service
 from app.services import events, selections, storage, tool_exec
@@ -52,12 +52,16 @@ async def inpaint_region(ctx, run_id: str) -> None:
         params = run.params or {}
         session_id = params.get("session_id") or (str(run.session_id) if run.session_id else None)
         if not session_id:
-            await runs_service.fail(run, code="no_session", message="任务没有绑定编辑会话")
+            owned = await runs_service.fail(
+                run, code="no_session", message="任务没有绑定编辑会话"
+            )
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if owned:
+                await runs_service.publish_terminal(run)
             return
 
         result_event = None
+        terminal_owned = False
         try:
             record = await sessions_service.get_edit_session(session, run.user_id, UUID(session_id))
             expected_revision = record.revision
@@ -104,7 +108,7 @@ async def inpaint_region(ctx, run_id: str) -> None:
                 expected_revision=expected_revision, params={"run_id": run_id},
             )
             session.add(SessionAsset(session_id=record.id, asset_id=asset.id))
-            await runs_service.succeed(
+            terminal_owned = await runs_service.succeed(
                 run,
                 {
                     "asset_ids": [str(asset.id)],
@@ -113,29 +117,37 @@ async def inpaint_region(ctx, run_id: str) -> None:
                     "applied_revision": record.revision,
                 },
             )
-            result_event = ResultEvent(
-                run_id=run.id, asset_id=asset.id,
-                url=storage.presign_get(asset.s3_key), wall_only=True,
-            )
+            if terminal_owned:
+                result_event = ResultEvent(
+                    run_id=run.id, asset_id=asset.id,
+                    url=storage.presign_get(asset.s3_key), wall_only=True,
+                )
         except history_service.RevisionConflict as exc:
-            await runs_service.fail(run, code="revision_conflict", message=str(exc))
+            terminal_owned = await runs_service.fail(
+                run, code="revision_conflict", message=str(exc)
+            )
         except (MaskSizeMismatch, tool_exec.ToolError) as exc:
             logger.info("任务 %s 被判废：%s", run_id, exc)
-            await runs_service.fail(run, code="stale_selection", message=str(exc), recoverable=True)
+            terminal_owned = await runs_service.fail(
+                run, code="stale_selection", message=str(exc), recoverable=True
+            )
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await runs_service.fail(run, code=exc.code, message=exc.message, recoverable=True)
+            terminal_owned = await runs_service.fail(
+                run, code=exc.code, message=exc.message, recoverable=True
+            )
         except Exception as exc:  # noqa: BLE001 - 任务里的任何异常都要落到 run.error
             logger.exception("任务 %s 失败", run_id)
-            await runs_service.fail(
+            terminal_owned = await runs_service.fail(
                 run, code="task_failed", message=str(exc) or "局部编辑失败", recoverable=True
             )
         finally:
             await session.commit()
             # 成功事件必须晚于文档、历史和 run 的提交；推送失败不反转已提交的成功。
-            if result_event is not None and run.status == "succeeded":
-                await events.publish(result_event)
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                if result_event is not None and run.status == "succeeded":
+                    await events.publish(result_event)
+                await runs_service.publish_terminal(run)
 
 
 async def edit_image_clamped(image: bytes, prompt: str, *, mask: bytes | None = None) -> bytes:

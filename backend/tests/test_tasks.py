@@ -161,6 +161,20 @@ def test_provider_failure_is_recorded_and_broadcast(monkeypatch):
 
     monkeypatch.setattr(image_task, "get_image_provider", lambda: BoomProvider())
 
+    real_publish = events.publish
+    committed_at_error: list[str] = []
+
+    async def checked_publish(event):
+        # 前端收到 error 会立刻 continue 计划；此刻任务必须已经落成终态，
+        # 否则 continue 会读到 running 并返回 409，计划就卡住了。
+        if event.type == "error":
+            async with runs_service.session_scope() as fresh_session:
+                fresh = await fresh_session.get(ToolRun, event.run_id)
+                committed_at_error.append(fresh.status)
+        await real_publish(event)
+
+    monkeypatch.setattr(events, "publish", checked_publish)
+
     async def scenario():
         run_id, _ = await _seed_run({"prompt": "x", "n": 1})
         collected = await _run_and_collect(run_id)
@@ -172,5 +186,9 @@ def test_provider_failure_is_recorded_and_broadcast(monkeypatch):
     assert status == "failed"
     assert error["code"] == "task_failed"
     assert "上游 502" in error["message"]
-    assert [e.type for e in collected][-1] == "done"
+    assert committed_at_error == ["failed"]
+    kinds = [e.type for e in collected]
+    assert kinds.count("error") == 1
+    assert kinds.count("done") == 1
+    assert kinds[-1] == "done"
     assert collected[-1].status == "failed"

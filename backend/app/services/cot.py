@@ -15,11 +15,14 @@ kind 语义（协议 M2 定死，这里只是填充）：
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from uuid import UUID
 
 from app.schemas.events import CotEvent
 from app.services.events import get_redis, publish
+
+logger = logging.getLogger("graph-canvas-ai.cot")
 
 CAP = 500
 TTL_SECONDS = 3600
@@ -31,19 +34,27 @@ _buf_key = "cot:{run_id}"
 async def emit(
     run_id: UUID, kind: str, delta: str, *, node: str | None = None
 ) -> int:
-    """追加一条 CoT 增量：缓冲 + 广播，返回 seq。delta 为空时跳过。"""
+    """追加一条 CoT 增量：缓冲 + 广播，返回 seq。delta 为空时跳过。
+
+    CoT 是旁路观测：Redis 抖动不能打断已经跑起来的图（否则工具成功、轮次失败）。
+    失败只记日志并返回 0，前端最多丢一段实时思考，刷新后仍以 DB 状态为准。
+    """
     if not delta:
         return 0
-    redis = get_redis()
-    seq = await redis.incr(_seq_key.format(run_id=run_id))
-    await redis.expire(_seq_key.format(run_id=run_id), TTL_SECONDS)
-    event = CotEvent(run_id=run_id, seq=seq, kind=kind, delta=delta, node=node)  # type: ignore[arg-type]
-    payload = event.model_dump_json()
-    await redis.rpush(_buf_key.format(run_id=run_id), payload)
-    await redis.ltrim(_buf_key.format(run_id=run_id), -CAP, -1)
-    await redis.expire(_buf_key.format(run_id=run_id), TTL_SECONDS)
-    await publish(event)
-    return seq
+    try:
+        redis = get_redis()
+        seq = await redis.incr(_seq_key.format(run_id=run_id))
+        await redis.expire(_seq_key.format(run_id=run_id), TTL_SECONDS)
+        event = CotEvent(run_id=run_id, seq=seq, kind=kind, delta=delta, node=node)  # type: ignore[arg-type]
+        payload = event.model_dump_json()
+        await redis.rpush(_buf_key.format(run_id=run_id), payload)
+        await redis.ltrim(_buf_key.format(run_id=run_id), -CAP, -1)
+        await redis.expire(_buf_key.format(run_id=run_id), TTL_SECONDS)
+        await publish(event)
+        return seq
+    except Exception:  # noqa: BLE001 - CoT 只是实时补强，绝不能拖垮图执行
+        logger.warning("CoT 事件发送失败 run_id=%s kind=%s", run_id, kind, exc_info=True)
+        return 0
 
 
 async def replay(run_id: UUID, after_seq: int = 0) -> list[dict[str, Any]]:

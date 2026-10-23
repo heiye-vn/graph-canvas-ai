@@ -421,10 +421,12 @@ async def test_worker_checks_original_revision_and_preserves_later_edit(
 
     async def succeed(run, result):
         run.status, run.result = "succeeded", result
+        return True
 
     async def fail(run, *, code, message, recoverable):
         run.status = "failed"
-        run.error = {"code": code, "message": message}
+        run.error = {"code": code, "message": message, "recoverable": recoverable}
+        return True
 
     buffer = io.BytesIO()
     Image.new("RGBA", (32, 24), (20, 40, 60, 255)).save(buffer, format="PNG")
@@ -488,7 +490,8 @@ async def test_worker_checks_original_revision_and_preserves_later_edit(
         assert db.scalars(select(EditHistory)).all() == []
         record_external.assert_not_awaited()
         clear.assert_not_called()
-        assert enhance.events.publish.call_args.args[0].status == "cancelled"
+        # 取消方拥有终态：worker 未成功切换状态就不许再发终态事件（否则重复 done）
+        enhance.events.publish.assert_not_awaited()
     elif conflict:
         assert run.status == "failed"
         assert run.error["code"] == "revision_conflict"

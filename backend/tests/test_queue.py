@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from app.services import queue
 
 
@@ -52,3 +54,16 @@ async def test_repeated_enqueue_collapses_to_one_job(monkeypatch):
 
     assert len(pool.calls) == 3
     assert {call[2]["_job_id"] for call in pool.calls} == {str(run_id)}
+
+
+async def test_enqueue_wraps_transport_failure(monkeypatch):
+    """投递失败必须显式暴露：调用方要能把已提交的任务补偿成 failed。"""
+
+    class BrokenPool:
+        async def enqueue_job(self, *args, **kwargs):
+            raise ConnectionError("redis down")
+
+    _patch_pool(monkeypatch, BrokenPool())
+
+    with pytest.raises(queue.EnqueueFailed):
+        await queue.enqueue("text_to_image", uuid.uuid4())

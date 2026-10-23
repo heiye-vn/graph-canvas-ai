@@ -159,30 +159,59 @@ async def _update_active(run: ToolRun, values: dict[str, Any]) -> bool:
     return result.rowcount == 1
 
 
-async def succeed(run: ToolRun, result: dict[str, Any]) -> None:
-    await _update_active(run, {
+async def succeed(run: ToolRun, result: dict[str, Any]) -> bool:
+    """返回 True 表示本次调用完成了终态迁移，调用方负责提交后发事件。"""
+    return await _update_active(run, {
         "status": SUCCEEDED, "progress": 100, "result": result,
         "error": None, "finished_at": datetime.now(UTC),
     })
 
 
-async def fail(run: ToolRun, *, code: str, message: str, recoverable: bool = True) -> None:
-    if not await _update_active(run, {
+async def fail(run: ToolRun, *, code: str, message: str, recoverable: bool = True) -> bool:
+    """只落状态，不发事件：失败帧必须等事务提交后再推。"""
+    return await _update_active(run, {
         "status": FAILED,
         "error": {"code": code, "message": message, "recoverable": recoverable},
         "finished_at": datetime.now(UTC),
-    }):
-        return
-    await events.publish(
-        ErrorEvent(run_id=run.id, code=code, message=message, recoverable=recoverable)
+    })
+
+
+async def mark_enqueue_failed(run: ToolRun) -> bool:
+    """队列投递失败：把已提交的 queued 任务切成可重试的 failed。
+
+    只改状态不提交；调用方提交后再 publish_terminal。
+    """
+    return await fail(
+        run,
+        code="enqueue_failed",
+        message="任务队列不可用，请稍后重试",
+        recoverable=True,
     )
 
 
-async def cancel(run: ToolRun) -> None:
-    if not await _update_active(run, {
+async def cancel(run: ToolRun) -> bool:
+    """只落状态，不发事件；调用方提交后调用 publish_terminal。"""
+    return await _update_active(run, {
         "status": CANCELLED, "finished_at": datetime.now(UTC),
-    }):
+    })
+
+
+async def publish_terminal(run: ToolRun) -> None:
+    """在事务提交后发布终态事件。
+
+    必须先 commit：前端收到 error 会立刻 continue 计划，此刻数据库里
+    仍然是 running 的话 continue 会 409，整轮计划就停住了。
+    """
+    if not run.is_terminal:
         return
-    # 必须推一帧 done：取消是用户在另一个请求里触发的，worker 侧不会产生任何事件。
-    # 少了这一帧，前端的进度条要一直转到超时才知道任务没了。
-    await events.publish(DoneEvent(run_id=run.id, status=CANCELLED))
+    if run.status == FAILED:
+        error = run.error or {}
+        await events.publish(
+            ErrorEvent(
+                run_id=run.id,
+                code=str(error.get("code") or "task_failed"),
+                message=str(error.get("message") or "任务失败"),
+                recoverable=bool(error.get("recoverable", True)),
+            )
+        )
+    await events.publish(DoneEvent(run_id=run.id, status=run.status))

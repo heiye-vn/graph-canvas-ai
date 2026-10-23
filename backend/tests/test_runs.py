@@ -117,6 +117,7 @@ def test_cancel_closes_the_stream_with_done():
                 run = await session.get(ToolRun, run_id)
                 await runs_service.cancel(run)
                 await session.commit()
+                await runs_service.publish_terminal(run)
 
             async for ev in stream:
                 return ev
@@ -141,15 +142,16 @@ def test_fail_publishes_error_event():
                     run, code="task_failed", message="模型超时", recoverable=True
                 )
                 await session.commit()
+                await runs_service.publish_terminal(run)
 
             async for ev in stream:
                 collected.append(ev)
-                break
+                if ev.type == "done":
+                    break
         return collected, run_id
 
     collected, _ = run_async(scenario())
-    assert len(collected) == 1
-    assert collected[0].type == "error"
+    assert [event.type for event in collected] == ["error", "done"]
     assert collected[0].code == "task_failed"
     assert collected[0].message == "模型超时"
     assert collected[0].recoverable is True

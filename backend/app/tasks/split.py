@@ -21,7 +21,7 @@ from app.edits.ocr import detect_text
 from app.edits.split import alpha_mask, grow_mask, remove_text
 from app.models import SessionAsset, ToolRun
 from app.providers.base import ProviderError
-from app.schemas.events import DoneEvent, ResultEvent
+from app.schemas.events import ResultEvent
 from app.services import assets as asset_service
 from app.services import events, selections, storage
 from app.services import flatten as flatten_service
@@ -49,10 +49,17 @@ async def split_layers(ctx, run_id: str) -> None:
         params = run.params or {}
         session_id = params.get("session_id") or (str(run.session_id) if run.session_id else None)
         if not session_id:
-            await _fail(run, session, "no_session", "任务没有绑定编辑会话")
+            owned = await runs_service.fail(
+                run, code="no_session", message="任务没有绑定编辑会话"
+            )
+            await session.commit()
+            if owned:
+                await runs_service.publish_terminal(run)
             return
         record = await sessions_service.get_edit_session(session, run.user_id, UUID(session_id))
 
+        result_events: list[ResultEvent] = []
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
@@ -91,7 +98,7 @@ async def split_layers(ctx, run_id: str) -> None:
             session.add(SessionAsset(session_id=record.id, asset_id=background_asset.id))
             session.add(SessionAsset(session_id=record.id, asset_id=subject_asset.id))
             for asset in (background_asset, subject_asset):
-                await events.publish(
+                result_events.append(
                     ResultEvent(
                         run_id=run.id,
                         asset_id=asset.id,
@@ -122,7 +129,7 @@ async def split_layers(ctx, run_id: str) -> None:
             )
             await selections.clear(record.id)
 
-            await runs_service.succeed(
+            terminal_owned = await runs_service.succeed(
                 run,
                 {
                     "asset_ids": [str(background_asset.id), str(subject_asset.id)],
@@ -131,26 +138,25 @@ async def split_layers(ctx, run_id: str) -> None:
                 },
             )
         except history_service.RevisionConflict as exc:
-            await runs_service.fail(
+            terminal_owned = await runs_service.fail(
                 run, code="revision_conflict", message=str(exc), recoverable=True
             )
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await runs_service.fail(run, code=exc.code, message=exc.message, recoverable=True)
+            terminal_owned = await runs_service.fail(
+                run, code=exc.code, message=exc.message, recoverable=True
+            )
         except Exception as exc:  # noqa: BLE001 - 任务里的任何异常都要落到 run.error
             logger.exception("任务 %s 失败", run_id)
-            await runs_service.fail(
+            terminal_owned = await runs_service.fail(
                 run, code="task_failed", message=str(exc) or "拆层失败", recoverable=True
             )
         finally:
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
-
-
-async def _fail(run: ToolRun, session, code: str, message: str) -> None:
-    await runs_service.fail(run, code=code, message=message, recoverable=True)
-    await session.commit()
-    await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                for event in result_events:
+                    await events.publish(event)
+                await runs_service.publish_terminal(run)
 
 
 def warm_matting() -> None:

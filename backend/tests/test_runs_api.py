@@ -80,6 +80,27 @@ def test_create_enqueues_job_with_run_id(monkeypatch, client: TestClient, user: 
     assert pool.calls[0][2]["_job_id"] == run["id"]
 
 
+def test_enqueue_failure_marks_run_failed(monkeypatch, client: TestClient, user: dict):
+    """Redis 挂了不能让任务永久停在 queued：建单后必须补偿成可重试的 failed。"""
+    captured: dict = {}
+
+    async def broken_enqueue(task, run_id):
+        captured["run_id"] = run_id
+        raise queue.EnqueueFailed("redis down")
+
+    monkeypatch.setattr(queue, "enqueue", broken_enqueue)
+
+    r = client.post(
+        "/api/runs/text-to-image", json={"prompt": "队列挂了"}, headers=auth(user)
+    )
+    assert r.status_code == 503
+
+    got = client.get(f"/api/runs/{captured['run_id']}", headers=auth(user)).json()
+    assert got["status"] == "failed"
+    assert got["error"]["code"] == "enqueue_failed"
+    assert got["error"]["recoverable"] is True
+
+
 def test_blank_prompt_is_rejected(client: TestClient, user: dict):
     """min_length=1 挡不住一串空格 —— 必须显式 trim 后再判空。"""
     r = client.post(

@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -33,12 +34,15 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import plan as plan_mod
-from app.models import AgentRun, EditHistory, EditSession
+from app.models import AgentRun, EditHistory, EditSession, ToolRun
 from app.models.history import HISTORY_LIMIT
 from app.schemas.layer_doc import LayerDocument
+from app.services import runs as runs_service
 from app.services import sessions as sessions_service
 from app.services import tool_exec
 from app.tools.base import QueuedOutcome, ToolContext, ToolError
+
+logger = logging.getLogger("graph-canvas-ai.history")
 
 __all__ = [
     "HISTORY_LIMIT",
@@ -76,12 +80,16 @@ class ToolCall:
 # ------------------------------------------------------------------ 写入
 
 
-async def _link_queued_step(session: AsyncSession, run_id: uuid.UUID) -> None:
-    """把排队任务写进父计划，且必须随**本事务**一起提交。
+async def _sync_agent_step(session: AsyncSession, step: StepResult) -> None:
+    """把步骤结果写进父计划，且必须随**本事务**一起提交。
 
-    图执行时会把 (轮次, 步骤) 放进 session.info["agent_step"]。投递 ARQ 之前
-    若不关联 run_id，父轮次就永远看不到这个子任务：取消时 plan 里没有 run_id，
-    子任务漏掉、worker 照旧跑完并改画布。
+    图执行时会把 (轮次, 步骤) 放进 session.info["agent_step"]。这里的写入有两个
+    不可替代的作用：
+
+    · 排队工具：投递 ARQ 之前必须关联 run_id，否则父轮次看不到子任务，
+      取消时漏掉它、worker 照旧跑完并改画布。
+    · 同步工具：文档、历史与步骤终态同生共死。进程若在「提交后、checkpoint
+      落盘前」崩溃，重放时 execute_node 以这里的终态为准，副作用不会再执行一遍。
     """
     # 非图调用的会话（直接 API 调工具）没有 agent_step，跳过即可
     agent_step = (getattr(session, "info", None) or {}).get("agent_step")
@@ -93,11 +101,21 @@ async def _link_queued_step(session: AsyncSession, run_id: uuid.UUID) -> None:
         return
     plan = [dict(item) for item in (turn.plan or [])]
     target = next((item for item in plan if item.get("id") == step_id), None)
-    # 已有 run_id 说明这一步早就投递过（重复调用），不要覆盖成新任务
-    if target is None or target.get("run_id"):
+    if target is None:
+        logger.warning(
+            "agent_step %s 不在父计划 %s 中，步骤结果未回写（plan 被外部改写？）",
+            step_id, turn_id,
+        )
         return
-    target["run_id"] = str(run_id)
-    target["status"] = plan_mod.QUEUED
+    # 已有 run_id 说明这一步早就投递过（重复调用），不要覆盖成新任务
+    if target.get("run_id"):
+        return
+    if step.run_id:
+        target["run_id"] = str(step.run_id)
+        target["status"] = plan_mod.QUEUED
+    else:
+        target["status"] = plan_mod.SUCCEEDED if step.ok else plan_mod.FAILED
+    target["message"] = step.message
     # plan 是 JSONB 列：必须整体重新赋值，原地改 dict 不会被识别成脏数据
     turn.plan = plan
 
@@ -162,7 +180,6 @@ async def apply_tool_calls(
                     run_id=result.run_id,
                 )
             )
-            await _link_queued_step(session, result.run_id)
             queued.append((result.task, result))
             continue
 
@@ -199,13 +216,30 @@ async def apply_tool_calls(
         # 「重复设置同一个值」这类 changed=False 的操作不该作废选区
         edit_session.revision += 1
 
+    # 图执行一次只带一个 agent_step：结果与文档/历史一起提交，重放才有据可依
+    if len(calls) == 1 and steps:
+        await _sync_agent_step(session, steps[0])
+
     await session.commit()
 
     # 事务已落地，现在投递排队任务（顺序：先库后队列，杜绝幽灵任务）
     from app.services import queue as queue_service
 
+    failed_enqueues: list[ToolRun] = []
     for task, outcome in queued:
-        await queue_service.enqueue(task, outcome.run_id)
+        try:
+            await queue_service.enqueue(task, outcome.run_id)
+        except queue_service.EnqueueFailed as exc:
+            # 文档已经提交，不能把整次调用回滚；补偿是把这条 run 切成可重试失败，
+            # 否则它永远停在 queued，前端会一直等一个根本没投递的 job
+            logger.warning("排队任务 %s 投递失败：%s", outcome.run_id, exc)
+            run = await session.get(ToolRun, outcome.run_id)
+            if run is not None and await runs_service.mark_enqueue_failed(run):
+                failed_enqueues.append(run)
+    if failed_enqueues:
+        await session.commit()
+        for run in failed_enqueues:
+            await runs_service.publish_terminal(run)
 
     await session.refresh(edit_session)
     return edit_session, steps

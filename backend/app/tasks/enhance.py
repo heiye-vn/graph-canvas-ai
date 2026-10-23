@@ -9,7 +9,7 @@
     - 去背景：源图尺寸不变，crop / transform 原样保留
     - 换背景：结果 resize 回画布尺寸，避免模型返回别的档位导致整层被拉伸
     - 扩图：按目标比例算新画布，原始画面居中补边后交给模型，结果再贴回目标尺寸
-    - 超分：只放大 canvas 与各图层几何，素材像素不动（可逆且不糊两次）
+    - 超分：拍平后整体放大，结果层替换文档（像素级操作无法保留旧图层结构）
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from PIL import Image
 from app.models import SessionAsset, ToolRun
 from app.providers import get_image_provider
 from app.providers.base import ProviderError
-from app.schemas.events import DoneEvent, ResultEvent
+from app.schemas.events import ResultEvent
 from app.schemas.layer_doc import Canvas, LayerDocument
 from app.services import assets as asset_service
 from app.services import events, storage
@@ -66,26 +66,16 @@ async def _bind(session, run: ToolRun):
     return record, params
 
 
-async def _fail(session, run: ToolRun, code: str, message: str) -> None:
-    await runs_service.fail(run, code=code, message=message, recoverable=True)
-    await session.commit()
-    await events.publish(DoneEvent(run_id=run.id, status=run.status))
+async def _fail(run: ToolRun, code: str, message: str) -> bool:
+    return await runs_service.fail(run, code=code, message=message, recoverable=True)
 
 
 async def _store(session, run: ToolRun, record, data: bytes):
-    """落素材 + 建立会话关联 + 推一张结果事件。"""
+    """落素材 + 建立会话关联；事件等终态提交后再发。"""
     asset = await asset_service.create_from_bytes(
         session, user_id=run.user_id, data=data, kind="image"
     )
     session.add(SessionAsset(session_id=record.id, asset_id=asset.id))
-    await events.publish(
-        ResultEvent(
-            run_id=run.id,
-            asset_id=asset.id,
-            url=storage.presign_get(asset.s3_key),
-            wall_only=True,
-        )
-    )
     return asset
 
 
@@ -100,15 +90,15 @@ async def _finish(
     params: dict,
     asset_ids: list[str],
     expected_revision: int,
-) -> None:
+) -> bool:
     """文档与历史同一事务 —— 与 apply_tool_calls 同一条不变量。"""
     if not await runs_service.lock_active(session, run):
-        return
+        return False
     await history_service.record_external(
         session, record, tool=tool, label=label, after=doc, params=params,
         expected_revision=expected_revision,
     )
-    await runs_service.succeed(
+    return await runs_service.succeed(
         run,
         {
             "asset_ids": asset_ids,
@@ -137,9 +127,14 @@ async def remove_background(ctx, run_id: str) -> None:
             return
         record, params = await _bind(session, run)
         if record is None:
-            await _fail(session, run, "no_session", "任务没有绑定编辑会话")
+            owned = await _fail(run, "no_session", "任务没有绑定编辑会话")
+            await session.commit()
+            if owned:
+                await runs_service.publish_terminal(run)
             return
 
+        result_event = None
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=15, stage="读取图层", to_running=True)
             await session.commit()
@@ -164,7 +159,7 @@ async def remove_background(ctx, run_id: str) -> None:
             updated = L.update_layer(
                 doc, layer.id, {"source": {"asset_id": new_asset.id}}
             )
-            await _finish(
+            terminal_owned = await _finish(
                 session,
                 run,
                 record,
@@ -175,17 +170,27 @@ async def remove_background(ctx, run_id: str) -> None:
                 asset_ids=[str(new_asset.id)],
                 expected_revision=expected_revision,
             )
+            if terminal_owned:
+                result_event = ResultEvent(
+                    run_id=run.id,
+                    asset_id=new_asset.id,
+                    url=storage.presign_get(new_asset.s3_key),
+                    wall_only=True,
+                )
         except history_service.RevisionConflict as exc:
-            await _fail(session, run, "revision_conflict", str(exc))
+            terminal_owned = await _fail(run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await _fail(session, run, exc.code, exc.message)
+            terminal_owned = await _fail(run, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001 - 任务里的任何异常都要落到 run.error
             logger.exception("任务 %s 失败", run_id)
-            await _fail(session, run, "task_failed", str(exc) or "去背景失败")
+            terminal_owned = await _fail(run, "task_failed", str(exc) or "去背景失败")
         finally:
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                if result_event is not None:
+                    await events.publish(result_event)
+                await runs_service.publish_terminal(run)
 
 
 # ------------------------------------------------------------------ 超分
@@ -207,9 +212,14 @@ async def upscale_image(ctx, run_id: str) -> None:
             return
         record, params = await _bind(session, run)
         if record is None:
-            await _fail(session, run, "no_session", "任务没有绑定编辑会话")
+            owned = await _fail(run, "no_session", "任务没有绑定编辑会话")
+            await session.commit()
+            if owned:
+                await runs_service.publish_terminal(run)
             return
 
+        result_event = None
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
@@ -230,35 +240,24 @@ async def upscale_image(ctx, run_id: str) -> None:
 
             new_asset = await _store(session, run, record, output)
 
-            # 几何整体放大：canvas、每个图层的位置/尺寸、文字字号
-            updated = doc.model_copy(deep=True)
-            updated.canvas = Canvas(
+            # 超分基于拍平后的整图，旧图层坐标已无意义：结果层独占新画布。
+            layer = L.new_image_layer(
+                new_asset.id,
                 width=doc.canvas.width * scale,
                 height=doc.canvas.height * scale,
-                background=doc.canvas.background,
+                name="超分结果",
             )
-            for layer in updated.layers:
-                transform = layer.transform
-                width = (
-                    transform.width
-                    if transform.width is not None
-                    else doc.canvas.width
-                )
-                height = (
-                    transform.height
-                    if transform.height is not None
-                    else doc.canvas.height
-                )
-                transform.x *= scale
-                transform.y *= scale
-                transform.width = width * scale
-                transform.height = height * scale
-                if layer.text is not None:
-                    layer.text.font_size *= scale
-            # layer_doc 是可变模型；重新校验一次确保宽高没越过 Canvas 上限
-            updated = LayerDocument.model_validate(updated.model_dump(mode="json"))
+            updated = LayerDocument(
+                canvas=Canvas(
+                    width=doc.canvas.width * scale,
+                    height=doc.canvas.height * scale,
+                    background=doc.canvas.background,
+                ),
+                layers=[layer],
+                active_layer_id=layer.id,
+            )
 
-            await _finish(
+            terminal_owned = await _finish(
                 session,
                 run,
                 record,
@@ -269,17 +268,27 @@ async def upscale_image(ctx, run_id: str) -> None:
                 asset_ids=[str(new_asset.id)],
                 expected_revision=expected_revision,
             )
+            if terminal_owned:
+                result_event = ResultEvent(
+                    run_id=run.id,
+                    asset_id=new_asset.id,
+                    url=storage.presign_get(new_asset.s3_key),
+                    wall_only=True,
+                )
         except history_service.RevisionConflict as exc:
-            await _fail(session, run, "revision_conflict", str(exc))
+            terminal_owned = await _fail(run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await _fail(session, run, exc.code, exc.message)
+            terminal_owned = await _fail(run, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001
             logger.exception("任务 %s 失败", run_id)
-            await _fail(session, run, "task_failed", str(exc) or "超分失败")
+            terminal_owned = await _fail(run, "task_failed", str(exc) or "超分失败")
         finally:
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                if result_event is not None:
+                    await events.publish(result_event)
+                await runs_service.publish_terminal(run)
 
 
 # ------------------------------------------------------------------ 换背景
@@ -301,9 +310,14 @@ async def replace_background(ctx, run_id: str) -> None:
             return
         record, params = await _bind(session, run)
         if record is None:
-            await _fail(session, run, "no_session", "任务没有绑定编辑会话")
+            owned = await _fail(run, "no_session", "任务没有绑定编辑会话")
+            await session.commit()
+            if owned:
+                await runs_service.publish_terminal(run)
             return
 
+        result_event = None
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
@@ -333,7 +347,7 @@ async def replace_background(ctx, run_id: str) -> None:
             # 新结果成为唯一可见的图像层 —— 叠在旧图上只会看到原图
             updated = L.switch_current_image(updated, layer.id)
 
-            await _finish(
+            terminal_owned = await _finish(
                 session,
                 run,
                 record,
@@ -344,17 +358,27 @@ async def replace_background(ctx, run_id: str) -> None:
                 asset_ids=[str(new_asset.id)],
                 expected_revision=expected_revision,
             )
+            if terminal_owned:
+                result_event = ResultEvent(
+                    run_id=run.id,
+                    asset_id=new_asset.id,
+                    url=storage.presign_get(new_asset.s3_key),
+                    wall_only=True,
+                )
         except history_service.RevisionConflict as exc:
-            await _fail(session, run, "revision_conflict", str(exc))
+            terminal_owned = await _fail(run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await _fail(session, run, exc.code, exc.message)
+            terminal_owned = await _fail(run, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001
             logger.exception("任务 %s 失败", run_id)
-            await _fail(session, run, "task_failed", str(exc) or "换背景失败")
+            terminal_owned = await _fail(run, "task_failed", str(exc) or "换背景失败")
         finally:
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                if result_event is not None:
+                    await events.publish(result_event)
+                await runs_service.publish_terminal(run)
 
 
 # ------------------------------------------------------------------ 指令编辑
@@ -375,9 +399,14 @@ async def edit_image(ctx, run_id: str) -> None:
             return
         record, params = await _bind(session, run)
         if record is None:
-            await _fail(session, run, "no_session", "任务没有绑定编辑会话")
+            owned = await _fail(run, "no_session", "任务没有绑定编辑会话")
+            await session.commit()
+            if owned:
+                await runs_service.publish_terminal(run)
             return
 
+        result_event = None
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
@@ -406,7 +435,7 @@ async def edit_image(ctx, run_id: str) -> None:
             )
             updated = L.switch_current_image(L.add_layer(doc, layer), layer.id)
 
-            await _finish(
+            terminal_owned = await _finish(
                 session,
                 run,
                 record,
@@ -417,17 +446,27 @@ async def edit_image(ctx, run_id: str) -> None:
                 asset_ids=[str(new_asset.id)],
                 expected_revision=expected_revision,
             )
+            if terminal_owned:
+                result_event = ResultEvent(
+                    run_id=run.id,
+                    asset_id=new_asset.id,
+                    url=storage.presign_get(new_asset.s3_key),
+                    wall_only=True,
+                )
         except history_service.RevisionConflict as exc:
-            await _fail(session, run, "revision_conflict", str(exc))
+            terminal_owned = await _fail(run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await _fail(session, run, exc.code, exc.message)
+            terminal_owned = await _fail(run, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001
             logger.exception("任务 %s 失败", run_id)
-            await _fail(session, run, "task_failed", str(exc) or "编辑失败")
+            terminal_owned = await _fail(run, "task_failed", str(exc) or "编辑失败")
         finally:
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                if result_event is not None:
+                    await events.publish(result_event)
+                await runs_service.publish_terminal(run)
 
 
 # ------------------------------------------------------------------ 扩图
@@ -466,9 +505,14 @@ async def expand_canvas(ctx, run_id: str) -> None:
             return
         record, params = await _bind(session, run)
         if record is None:
-            await _fail(session, run, "no_session", "任务没有绑定编辑会话")
+            owned = await _fail(run, "no_session", "任务没有绑定编辑会话")
+            await session.commit()
+            if owned:
+                await runs_service.publish_terminal(run)
             return
 
+        result_event = None
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=15, stage="读取画布", to_running=True)
             await session.commit()
@@ -509,7 +553,7 @@ async def expand_canvas(ctx, run_id: str) -> None:
                 active_layer_id=layer.id,
             )
 
-            await _finish(
+            terminal_owned = await _finish(
                 session,
                 run,
                 record,
@@ -520,14 +564,24 @@ async def expand_canvas(ctx, run_id: str) -> None:
                 asset_ids=[str(new_asset.id)],
                 expected_revision=expected_revision,
             )
+            if terminal_owned:
+                result_event = ResultEvent(
+                    run_id=run.id,
+                    asset_id=new_asset.id,
+                    url=storage.presign_get(new_asset.s3_key),
+                    wall_only=True,
+                )
         except history_service.RevisionConflict as exc:
-            await _fail(session, run, "revision_conflict", str(exc))
+            terminal_owned = await _fail(run, "revision_conflict", str(exc))
         except ProviderError as exc:
             logger.warning("任务 %s Provider 失败：%s", run_id, exc)
-            await _fail(session, run, exc.code, exc.message)
+            terminal_owned = await _fail(run, exc.code, exc.message)
         except Exception as exc:  # noqa: BLE001
             logger.exception("任务 %s 失败", run_id)
-            await _fail(session, run, "task_failed", str(exc) or "扩图失败")
+            terminal_owned = await _fail(run, "task_failed", str(exc) or "扩图失败")
         finally:
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                if result_event is not None:
+                    await events.publish(result_event)
+                await runs_service.publish_terminal(run)

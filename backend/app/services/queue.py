@@ -17,6 +17,10 @@ from app.config import get_settings
 _pool: ArqRedis | None = None
 
 
+class EnqueueFailed(RuntimeError):
+    """任务没能投递进 ARQ。调用方必须补偿，否则已提交的 run 会永远停在 queued。"""
+
+
 async def get_pool() -> ArqRedis:
     global _pool
     if _pool is None:
@@ -25,8 +29,13 @@ async def get_pool() -> ArqRedis:
 
 
 async def enqueue(task: str, run_id: UUID | str) -> None:
-    pool = await get_pool()
-    await pool.enqueue_job(task, str(run_id), _job_id=str(run_id))
+    global _pool
+    try:
+        pool = await get_pool()
+        await pool.enqueue_job(task, str(run_id), _job_id=str(run_id))
+    except Exception as exc:  # noqa: BLE001 - 任何投递失败都要转成可补偿的错误
+        _pool = None  # 坏连接不复用，下一次调用重建
+        raise EnqueueFailed("任务队列不可用") from exc
 
 
 async def close_pool() -> None:

@@ -7,6 +7,7 @@ worker 与 API 是两个进程，进度必须靠一条公共通道传出去—�
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -18,6 +19,8 @@ from app.config import get_settings
 from app.schemas.events import Event, StreamEvent
 
 CHANNEL_PREFIX = "run"
+
+logger = logging.getLogger("graph-canvas-ai.events")
 
 _redis: Redis | None = None
 
@@ -45,7 +48,17 @@ def channel_of(run_id: UUID | str) -> str:
 
 
 async def publish(event: Event) -> None:
-    await get_redis().publish(channel_of(event.run_id), event.model_dump_json())
+    """尽力推送。事件只是实时补强，数据库才是真相。
+
+    Redis 抖动不能让**已经提交**的状态在 API 里变成 500，也不能让 worker
+    在任务成功后再判一次失败 —— 前端刷新/轮询会从数据库把现场补回来。
+    """
+    try:
+        await get_redis().publish(channel_of(event.run_id), event.model_dump_json())
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "事件发布失败 run_id=%s type=%s", event.run_id, event.type,
+        )
 
 
 @asynccontextmanager

@@ -105,3 +105,23 @@ def test_split_layers_registered_and_queued(client, auth):
     assert body["run_id"]
     # 排队提交不动文档：revision 不变，画布还是原样
     assert body["session"]["revision"] == revision
+
+
+def test_enqueue_failure_fails_queued_run(monkeypatch, client, auth):
+    """文档已提交但队列不可用：任务必须落 failed，不能永远排队等一个不存在的 job。"""
+    from app.services import queue
+
+    captured: dict = {}
+
+    async def broken_enqueue(task, run_id):
+        captured["run_id"] = run_id
+        raise queue.EnqueueFailed("redis down")
+
+    monkeypatch.setattr(queue, "enqueue", broken_enqueue)
+    session = make_session(client, auth)
+    r = invoke(client, auth, "split_layers", session["id"], {"include_text": False})
+    assert r.status_code == 200, r.text
+
+    run = client.get(f"/api/runs/{captured['run_id']}", headers=auth).json()
+    assert run["status"] == "failed"
+    assert run["error"]["code"] == "enqueue_failed"

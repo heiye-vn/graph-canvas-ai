@@ -11,7 +11,7 @@ from uuid import UUID
 
 from app.models import Asset, ToolRun
 from app.providers import get_image_provider
-from app.schemas.events import DoneEvent, ResultEvent
+from app.schemas.events import ResultEvent
 from app.services import assets as asset_service
 from app.services import events, storage
 from app.services import runs as runs_service
@@ -35,6 +35,8 @@ async def text_to_image(ctx, run_id: str) -> None:
         size = params.get("size") or "1024x1024"
         n = int(params.get("n") or 1)
 
+        result_events: list[ResultEvent] = []
+        terminal_owned = False
         try:
             await runs_service.report(run, progress=5, stage="准备中", to_running=True)
             await session.commit()
@@ -61,8 +63,7 @@ async def text_to_image(ctx, run_id: str) -> None:
                 session.add(asset)
                 await session.flush()
                 asset_ids.append(str(asset.id))
-
-                await events.publish(
+                result_events.append(
                     ResultEvent(
                         run_id=run.id,
                         asset_id=asset.id,
@@ -74,14 +75,19 @@ async def text_to_image(ctx, run_id: str) -> None:
                     progress=40 + int(index / len(images) * 55),
                     stage=f"已产出 {index}/{len(images)}",
                 )
-                await session.commit()
 
-            await runs_service.succeed(run, {"asset_ids": asset_ids, "count": len(asset_ids)})
+            terminal_owned = await runs_service.succeed(
+                run, {"asset_ids": asset_ids, "count": len(asset_ids)}
+            )
         except Exception as exc:  # noqa: BLE001 - 任务里的任何异常都要落到 run.error
             logger.exception("任务 %s 失败", run_id)
-            await runs_service.fail(
+            terminal_owned = await runs_service.fail(
                 run, code="task_failed", message=str(exc) or "生成失败", recoverable=True
             )
         finally:
+            # 产物、终态都落库后才发事件；失败时结果帧不能先于终态出现。
             await session.commit()
-            await events.publish(DoneEvent(run_id=run.id, status=run.status))
+            if terminal_owned:
+                for event in result_events:
+                    await events.publish(event)
+                await runs_service.publish_terminal(run)

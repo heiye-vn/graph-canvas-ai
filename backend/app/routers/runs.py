@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, field_validator
@@ -15,6 +17,8 @@ from app.schemas.asset import AssetOut
 from app.services import assets as asset_service
 from app.services import queue
 from app.services import runs as runs_service
+
+logger = logging.getLogger("graph-canvas-ai.runs")
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -39,8 +43,6 @@ class TextToImageRequest(BaseModel):
             raise ValueError("prompt 不能为空")
         return stripped
 
-
-from datetime import datetime
 
 class RunOut(BaseModel):
     id: uuid.UUID
@@ -76,7 +78,19 @@ async def create_text_to_image(
         tool=TOOL_TEXT_TO_IMAGE,
         params={"prompt": payload.prompt, "size": payload.size, "n": payload.n},
     )
-    await queue.enqueue(TOOL_TEXT_TO_IMAGE, run.id)
+    try:
+        await queue.enqueue(TOOL_TEXT_TO_IMAGE, run.id)
+    except queue.EnqueueFailed as exc:
+        logger.warning("文生图任务 %s 入队失败：%s", run.id, exc)
+        # 任务行已提交；不补偿就会永远显示排队中，用户既拿不到结果也取消不了
+        transitioned = await runs_service.mark_enqueue_failed(run)
+        await session.commit()
+        if transitioned:
+            await runs_service.publish_terminal(run)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="任务队列暂不可用，请稍后重试",
+        ) from exc
     return RunOut.model_validate(run)
 
 
@@ -90,7 +104,9 @@ async def list_runs(
 ) -> list[RunOut]:
     # 当指定了 tool 时，稍微多查一些，避免部分图片已被用户删除的空壳任务占用 limit 名额
     fetch_limit = limit * 2 if tool else limit
-    runs = await runs_service.list_runs(session, user.id, limit=fetch_limit, tool=tool, status=status)
+    runs = await runs_service.list_runs(
+        session, user.id, limit=fetch_limit, tool=tool, status=status
+    )
 
     # 批量收集所有任务的 asset_id，以便一次性查询数据库中真正存在的图片及其预签名 URL
     all_asset_ids: list[uuid.UUID] = []
@@ -202,8 +218,10 @@ async def cancel_run(
     run = await runs_service.get_run(session, user.id, run_id)
     if run.status in TERMINAL_STATUSES:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="任务已结束，无法取消")
-    await runs_service.cancel(run)
+    transitioned = await runs_service.cancel(run)
     await session.commit()
+    if transitioned:
+        await runs_service.publish_terminal(run)
     # 队列里的任务无法跨进程召回，只能靠 worker 执行时看到 cancelled 自行跳过
     return RunOut.model_validate(run)
 
