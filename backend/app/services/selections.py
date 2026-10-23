@@ -18,7 +18,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.edits.mask import overlay_png, rasterize_strokes, to_luma, union
+from app.edits.mask import overlay_png, rasterize_strokes, to_luma
 from app.edits.segment import segment_points
 from app.models import EditSession
 from app.services import assets as asset_service
@@ -93,13 +93,15 @@ async def select_strokes(
     revision: int,
     strokes: list[list[tuple[float, float]]],
     radius: float,
+    *,
+    append: bool,
 ) -> dict:
-    """笔刷：归一化笔迹栅格化成遮罩， append 时与已有遮罩取并集。"""
+    """笔刷：归一化笔迹栅格化成遮罩。append=false 时重新起选区。"""
     _guard(record, revision)
     if not any(strokes):
         raise EmptySelection
     size = (record.doc["canvas"]["width"], record.doc["canvas"]["height"])
-    current = await get(record.id, revision)
+    current = await get(record.id, revision) if append else None
     base = None
     markers = list((current or {}).get("markers") or [])
     if current:
@@ -107,9 +109,8 @@ async def select_strokes(
             session, record.user_id, uuid.UUID(current["mask_asset_id"])
         )
         base = to_luma(storage.get_object(asset.s3_key), size)
+    # rasterize 直接在 base 上续画，无需再做一次并集
     mask = rasterize_strokes(size, strokes, radius=radius, base=base)
-    if base is not None:
-        mask = union(base, mask)
     return await _store(session, record, revision, overlay_png(mask), markers)
 
 

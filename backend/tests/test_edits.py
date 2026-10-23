@@ -10,14 +10,7 @@ import io
 import pytest
 from PIL import Image
 
-from app.edits.mask import (
-    MaskSizeMismatch,
-    apply_masked,
-    overlay_png,
-    rasterize_strokes,
-    to_luma,
-    union,
-)
+from app.edits.mask import MaskSizeMismatch, apply_masked, overlay_png, rasterize_strokes, to_luma
 from app.edits.render import flatten
 from app.schemas.layer_doc import Adjustments, LayerDocument
 
@@ -63,17 +56,6 @@ def test_rasterize_strokes_accumulates_on_base():
     stroke = rasterize_strokes(SIZE, [[(0.9, 0.9)]], radius=0.25, base=base)
     assert stroke.getpixel((6, 4)) == 255  # base 的部分还在
     assert stroke.getpixel((57, 43)) == 255  # 新笔迹也在
-
-
-def test_union_takes_lighter():
-    a = Image.new("L", SIZE, 0)
-    a.putpixel((0, 0), 255)
-    b = Image.new("L", SIZE, 0)
-    b.putpixel((1, 0), 255)
-    merged = union(a, b)
-    assert merged.getpixel((0, 0)) == 255
-    assert merged.getpixel((1, 0)) == 255
-    assert merged.getpixel((2, 0)) == 0
 
 
 def test_apply_masked_only_changes_selected_region():

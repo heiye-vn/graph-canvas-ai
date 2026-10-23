@@ -105,6 +105,64 @@ def test_brush_selection_roundtrip(client: TestClient, user: dict):
     assert after.json() is None
 
 
+def test_brush_without_append_starts_a_new_selection(client: TestClient, user: dict):
+    """不追加时必须重新起选区：旧笔迹不能悄悄留在遮罩里。"""
+    import httpx
+
+    session = make_session(client, user)
+    revision = session["revision"]
+    url = f"/api/edit-sessions/{session['id']}/selection"
+
+    first = client.post(
+        url,
+        json={"revision": revision, "strokes": [[{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.1}]]},
+        headers=auth(user),
+    )
+    assert first.status_code == 200, first.text
+
+    second = client.post(
+        url,
+        json={"revision": revision, "strokes": [[{"x": 0.8, "y": 0.8}, {"x": 0.9, "y": 0.8}]]},
+        headers=auth(user),
+    )
+    assert second.status_code == 200, second.text
+
+    alpha = Image.open(io.BytesIO(httpx.get(second.json()["mask"]["url"]).content)).getchannel("A")
+    assert alpha.getpixel((54, 51)) > 0, "新笔迹必须被选中"
+    assert alpha.getpixel((9, 6)) == 0, "未追加时旧笔迹必须被清掉"
+
+
+def test_brush_append_unions_with_existing_mask(client: TestClient, user: dict):
+    """append=true 时两笔都要保留（连续涂抹共用一张遮罩）。"""
+    import httpx
+
+    session = make_session(client, user)
+    revision = session["revision"]
+    url = f"/api/edit-sessions/{session['id']}/selection"
+
+    first = client.post(
+        url,
+        json={"revision": revision, "strokes": [[{"x": 0.1, "y": 0.1}, {"x": 0.2, "y": 0.1}]]},
+        headers=auth(user),
+    )
+    assert first.status_code == 200, first.text
+
+    second = client.post(
+        url,
+        json={
+            "revision": revision,
+            "strokes": [[{"x": 0.8, "y": 0.8}, {"x": 0.9, "y": 0.8}]],
+            "append": True,
+        },
+        headers=auth(user),
+    )
+    assert second.status_code == 200, second.text
+
+    alpha = Image.open(io.BytesIO(httpx.get(second.json()["mask"]["url"]).content)).getchannel("A")
+    assert alpha.getpixel((9, 6)) > 0
+    assert alpha.getpixel((54, 51)) > 0
+
+
 def test_point_selection_accumulates_markers(client: TestClient, user: dict):
     session = make_session(client, user)
     revision = session["revision"]

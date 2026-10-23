@@ -284,6 +284,7 @@ async def create_selection(
                 payload.revision,
                 [[(point.x, point.y) for point in stroke] for stroke in payload.strokes],
                 payload.radius,
+                append=payload.append,
             )
         else:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "请点选或涂抹选区")

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import io
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter
 
 OVERLAY_COLOR = (95, 152, 173)
 
@@ -76,11 +76,6 @@ def rasterize_strokes(
         for point in points:
             _dot(draw, point, brush)
     return mask
-
-
-def union(left: Image.Image, right: Image.Image) -> Image.Image:
-    """两块遮罩取并集（逐像素取亮）。"""
-    return ImageChops.lighter(left.convert("L"), right.convert("L"))
 
 
 def apply_masked(source: bytes, edited: bytes, mask: bytes) -> bytes:
