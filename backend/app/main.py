@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from os import getenv
 from pathlib import Path
 
@@ -52,11 +52,23 @@ async def lifespan(app: FastAPI):
     await run_in_threadpool(storage.ensure_bucket)
     logger.info("对象存储就绪：bucket=%s", storage.bucket_name())
 
+    # 上一进程崩溃/重启留下的 planning/running 轮次从这里接上（checkpoint 断点续跑）。
+    # 测试环境关闭：跨用例残留的轮次会被真实模型驱动，破坏用例隔离。
+    if settings.app_env != "test":
+        from app.services import agent_runs as agent_runs_service
+
+        async def _recover_agents() -> None:
+            try:
+                await agent_runs_service.recover_pending()
+                logger.info("Agent 未完成轮次恢复完成")
+            except Exception:  # noqa: BLE001 - 恢复失败不阻塞启动
+                logger.exception("Agent 轮次恢复失败")
+
+        app.state.agent_recovery = asyncio.create_task(_recover_agents())
+
     # 预热两条重模型的链路（都在后台跑、失败只告警、不阻塞启动）：
     # SAM —— 点选分割；rembg/u2net —— 拆层的主体分离
     if settings.matting_provider in ("auto", "sam"):
-        import asyncio
-
         from app.edits.segment import warm_session
         from app.tasks.split import warm_matting
 
@@ -78,9 +90,16 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        from app.services import agent_runs as agent_runs_service
         from app.services.events import close_redis
         from app.services.queue import close_pool
 
+        recovery = getattr(app.state, "agent_recovery", None)
+        if recovery is not None and not recovery.done():
+            recovery.cancel()
+            with suppress(asyncio.CancelledError):
+                await recovery
+        await agent_runs_service.shutdown_background_tasks()
         await close_pool()
         await close_redis()
         await dispose_engine()

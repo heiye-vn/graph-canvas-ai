@@ -149,7 +149,6 @@ async def execute_node(state: GraphState) -> dict[str, Any]:
         return {"plan": steps}
     step = ready[0]
     started = time.monotonic()
-    await emit("observation", f"开始执行第 {step['id']} 步：{step['tool']}")
 
     async with runs_service.session_scope() as session:
         turn = await session.get(
@@ -157,6 +156,23 @@ async def execute_node(state: GraphState) -> dict[str, Any]:
         )
         if turn is None or turn.is_terminal:
             return {"plan": plan_mod.cancel_remaining(steps)}
+        # 崩溃重放保护：apply_tool_calls 已把这一步的终态与副作用同事务提交，
+        # 而 checkpoint 可能仍停在执行前 —— DB 里已推进的步骤绝不重复执行。
+        committed = next(
+            (item for item in (turn.plan or []) if item.get("id") == step["id"]), None,
+        )
+        if committed is not None and (
+            committed.get("status") not in (plan_mod.PENDING, plan_mod.WAITING)
+            or committed.get("run_id")
+        ):
+            for item in steps:
+                if item.get("id") == step["id"]:
+                    item.update(
+                        {key: committed.get(key) for key in ("status", "run_id", "message")}
+                    )
+                    break
+            return {"plan": steps}
+        await emit("observation", f"开始执行第 {step['id']} 步：{step['tool']}")
         # 工具提交时在同一事务内关联父计划；不能等图增量写回，否则取消会漏子任务。
         session.info["agent_step"] = (turn.id, step["id"])
         try:
@@ -186,8 +202,9 @@ async def execute_node(state: GraphState) -> dict[str, Any]:
         step["message"] = result.message
         await emit("observation", f"失败：{result.message}")
 
-    # 每步一条 tool span：平均步耗时 / 工具失败率都从这里聚合
-    ok = step["status"] == plan_mod.SUCCEEDED
+    # 排队只代表提交成功；异步工具真正的成败由 observe 节点核对，
+    # 这里记 failed 会把所有排队型工具的提交都算进工具失败率。
+    ok = step["status"] in (plan_mod.SUCCEEDED, plan_mod.QUEUED)
     await traces_service.record_detached(
         uuid.UUID(state["run_id"]),
         uuid.UUID(state["session_id"]),

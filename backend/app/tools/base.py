@@ -89,6 +89,8 @@ class ToolSpec:
     undoable: bool = True
     """True = 重像素工具：提交时创建 ToolRun 走 ARQ，handler 返回 QueuedOutcome。"""
     queued: bool = False
+    queue_task: str | None = None
+    """排队型工具对应的 ARQ 任务名；None 表示与工具名相同（选区工具共用 inpaint_region）。"""
 
     def parse(self, raw: dict[str, Any], ctx: ToolContext) -> BaseModel:
         """校验参数。

@@ -115,6 +115,7 @@ register(
         handler=erase_region_submit,
         group="生成",
         queued=True,
+        queue_task=TASK,
     )
 )
 
@@ -131,5 +132,6 @@ register(
         handler=replace_region_submit,
         group="生成",
         queued=True,
+        queue_task=TASK,
     )
 )
