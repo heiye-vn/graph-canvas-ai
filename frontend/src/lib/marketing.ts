@@ -74,6 +74,6 @@ export const DELIVERY_STEPS: DeliveryStep[] = [
 
 export const DELIVERY_RATIOS = [
   { label: '1:1', usage: '商品主图' },
-  { label: '3:4', usage: '详情页竖图' },
-  { label: '4:3', usage: '场景横图' },
+  { label: '4:5', usage: '详情页竖图' },
+  { label: '9:16', usage: '信息流竖版' },
 ]
