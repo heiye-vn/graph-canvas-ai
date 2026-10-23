@@ -131,7 +131,7 @@ async def agent_metrics(
     session: AsyncSession = Depends(get_session),
 ) -> MetricsOut:
     """可观测指标（DoD ②③）：校验拒绝率趋势 + 按 prompt_version 对比。"""
-    return await traces_service.metrics(session, days=days)
+    return await traces_service.metrics(session, user_id=user.id, days=days)
 
 
 @router.get("/sessions/{session_id}/runs", response_model=list[AgentRunOut])

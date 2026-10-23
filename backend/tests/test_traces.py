@@ -186,3 +186,57 @@ def test_trace_requires_ownership(client, auth):
     r = client.get(f"/api/agent/runs/{stub}/trace", headers={"Authorization": f"Bearer {other}"})
     assert r.status_code == 200
     assert r.json() == []  # 看不到别人的 span，也不报错
+
+
+def test_metrics_are_scoped_to_the_current_user(client, auth, monkeypatch):
+    """指标是个人观测，不是全局看板：别人的失败不能污染我的口径。"""
+    session = make_session(client, auth)
+    stub_planner(monkeypatch, [{"name": "不存在的工具", "args": {}}])
+    created = client.post(
+        "/api/agent/plan",
+        json={"session_id": session["id"], "instruction": "必然被拒"},
+        headers=auth,
+    ).json()
+    wait_plan(client, auth, created["id"])
+
+    own = client.get("/api/agent/metrics?days=7", headers=auth).json()
+    assert own["rounds_total"] == 1
+    assert own["rejected_total"] >= 1
+
+    other_token = client.post(
+        "/api/auth/register",
+        json={
+            "email": f"metrics_{uuid.uuid4().hex[:10]}@example.com",
+            "password": "Strong-Pass-123",
+        },
+    ).json()["token"]["access_token"]
+    other = client.get(
+        "/api/agent/metrics?days=7", headers={"Authorization": f"Bearer {other_token}"}
+    ).json()
+    assert other["rounds_total"] == 0
+    assert other["rejected_total"] == 0
+    assert other["by_prompt_version"] == []
+
+
+def test_metrics_counts_replanned_rounds(client, auth, monkeypatch):
+    """重规划次数来自 reflect span，而不是去 error 文案里找关键词。"""
+    session = make_session(client, auth)
+    calls = {"n": 0}
+
+    async def fake(instruction, summary, functions, emit=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return [{"name": "remove_layer", "args": {"layer": "不存在的图层"}}]
+        return [{"name": "flip_layer", "args": {"direction": "horizontal"}}]
+
+    monkeypatch.setattr(llm_module, "plan_tool_calls_stream", fake)
+    created = client.post(
+        "/api/agent/plan",
+        json={"session_id": session["id"], "instruction": "先失败再重来"},
+        headers=auth,
+    ).json()
+    run = wait_plan(client, auth, created["id"], timeout=12.0)
+    assert run["status"] == "succeeded", run
+
+    metrics = client.get("/api/agent/metrics?days=7", headers=auth).json()
+    assert metrics["replan_rounds"] == 1

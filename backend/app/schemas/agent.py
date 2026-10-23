@@ -86,6 +86,7 @@ class MetricsOut(BaseModel):
     rejected_total: int
     reject_rate: float
     avg_steps_per_round: float
+    replan_rounds: int
     tool_fail_rate: float
     daily: list[DailyMetrics]
     by_prompt_version: list[VersionMetrics]

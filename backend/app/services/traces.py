@@ -94,8 +94,10 @@ async def trace_of(
     return list(result.all())
 
 
-async def metrics(session: AsyncSession, *, days: int = 14) -> dict[str, Any]:
-    """按天聚合的可观测指标。核心是**计划校验拒绝率**（DoD ②）。
+async def metrics(
+    session: AsyncSession, *, user_id: uuid.UUID, days: int = 14
+) -> dict[str, Any]:
+    """按天聚合的可观测指标（仅当前用户）。核心是**计划校验拒绝率**（DoD ②）。
 
     拒绝率口径：planning 阶段 validate 失败的轮数 / 规划总轮数。
     分母取 turn 级（agent_runs），分子取 validate span 的 failed 数 ——
@@ -105,32 +107,45 @@ async def metrics(session: AsyncSession, *, days: int = 14) -> dict[str, Any]:
 
     turns = (
         await session.scalars(
-            select(AgentRun).where(AgentRun.created_at >= since).order_by(AgentRun.created_at)
+            select(AgentRun)
+            .where(AgentRun.user_id == user_id, AgentRun.created_at >= since)
+            .order_by(AgentRun.created_at)
         )
     ).all()
 
     validate_failed = (
         await session.scalars(
-            select(func.count(AgentTrace.id)).where(
+            select(func.count(AgentTrace.id))
+            .join(AgentRun, AgentRun.id == AgentTrace.agent_run_id)
+            .where(
                 AgentTrace.kind == "validate",
                 AgentTrace.status == "failed",
                 AgentTrace.created_at >= since,
+                AgentRun.user_id == user_id,
             )
         )
     ).one()
 
     tool_spans = (
         await session.scalars(
-            select(AgentTrace).where(
-                AgentTrace.kind == "tool", AgentTrace.created_at >= since
+            select(AgentTrace)
+            .join(AgentRun, AgentRun.id == AgentTrace.agent_run_id)
+            .where(
+                AgentTrace.kind == "tool",
+                AgentTrace.created_at >= since,
+                AgentRun.user_id == user_id,
             )
         )
     ).all()
 
     planner_spans = (
         await session.scalars(
-            select(AgentTrace).where(
-                AgentTrace.kind == "planner", AgentTrace.created_at >= since
+            select(AgentTrace)
+            .join(AgentRun, AgentRun.id == AgentTrace.agent_run_id)
+            .where(
+                AgentTrace.kind == "planner",
+                AgentTrace.created_at >= since,
+                AgentRun.user_id == user_id,
             )
         )
     ).all()
@@ -173,8 +188,12 @@ async def metrics(session: AsyncSession, *, days: int = 14) -> dict[str, Any]:
     # validate 失败按版本分：靠 run 关联回 planner span 的版本
     validate_rows = (
         await session.scalars(
-            select(AgentTrace).where(
-                AgentTrace.kind == "validate", AgentTrace.created_at >= since
+            select(AgentTrace)
+            .join(AgentRun, AgentRun.id == AgentTrace.agent_run_id)
+            .where(
+                AgentTrace.kind == "validate",
+                AgentTrace.created_at >= since,
+                AgentRun.user_id == user_id,
             )
         )
     ).all()
@@ -201,8 +220,20 @@ async def metrics(session: AsyncSession, *, days: int = 14) -> dict[str, Any]:
     avg_steps = (
         round(sum(len(t.plan or []) for t in turns if t.plan) / max(1, planned_turns), 2)
     )
-    replan_rounds = sum(
-        1 for t in turns if any("重规划" in (e or "") for e in [t.error or ""])
+    # 重规划轮数 = 产生过 reflect span 的轮次；不要从 error 文案里猜（那里没有这个信息）
+    replan_rounds = len(
+        (
+            await session.scalars(
+                select(AgentTrace.agent_run_id)
+                .join(AgentRun, AgentRun.id == AgentTrace.agent_run_id)
+                .where(
+                    AgentTrace.kind == "reflect",
+                    AgentTrace.created_at >= since,
+                    AgentRun.user_id == user_id,
+                )
+                .distinct()
+            )
+        ).all()
     )
 
     return {
