@@ -51,7 +51,7 @@ docker compose up -d
 
 # 2) 后端（依赖可选；CV 体积大，抠图/超分才需要）
 cd backend
-uv sync --extra dev                     # 或再加 --extra agent / --extra cv
+uv sync --all-extras                    # 安装全套扩展（Agent、CV、Dev）
 uv run uvicorn app.main:app --port 7402 --reload
 
 # 3) 异步任务 worker（必须与 API 同时跑，再开一个终端）
