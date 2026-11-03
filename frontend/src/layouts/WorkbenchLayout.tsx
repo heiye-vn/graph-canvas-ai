@@ -10,6 +10,7 @@ import type { ReactNode } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 
 import BrandMark from '@/components/BrandMark'
+import GlobalTaskFloating from '@/components/GlobalTaskFloating'
 import { useAuthStore } from '@/stores/authStore'
 
 const NAV_ITEMS: { to: string; label: string; icon: ReactNode }[] = [
@@ -83,6 +84,7 @@ export default function WorkbenchLayout() {
 
       <main className="min-w-0 flex-1 overflow-auto bg-slate-100">
         <Outlet />
+        <GlobalTaskFloating />
       </main>
     </div>
   )

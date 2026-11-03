@@ -11,7 +11,9 @@ import {
   DeleteOutlined,
   DownOutlined,
   InboxOutlined,
+  LoadingOutlined,
   PictureOutlined,
+  RightOutlined,
   ThunderboltOutlined,
   UpOutlined,
 } from '@ant-design/icons'
@@ -26,6 +28,7 @@ import {
 import type { RunOut } from '@/api/runs'
 import { useCreateSessionAndEdit } from '@/hooks/useCreateSession'
 import { uploadAsset } from '@/domain/upload'
+import { useTaskStore } from '@/stores/taskStore'
 
 const ACCEPTED = ['image/png', 'image/jpeg', 'image/webp']
 
@@ -159,11 +162,14 @@ function RunHistoryItem({
   const navigate = useNavigate()
   const openEditor = useCreateSessionAndEdit()
 
-  // 展开时才拉取该任务产出的候选图片列表
+  const isActive = run.status === 'queued' || run.status === 'running'
+  const isFailed = run.status === 'failed' || run.status === 'cancelled'
+
+  // 展开时才拉取该任务产出的候选图片列表（仅已完成的任务需要）
   const assetsQuery = useQuery({
     queryKey: ['run-assets', run.id],
     queryFn: () => listRunAssets(run.id),
-    enabled: expanded,
+    enabled: expanded && !isActive,
   })
 
   const deleteMutation = useMutation({
@@ -178,17 +184,39 @@ function RunHistoryItem({
     1
   const timeStr = formatRunTime(run.created_at)
 
+  const handleCardClick = () => {
+    if (isActive) {
+      navigate(`/candidates/${run.id}`)
+    } else {
+      setExpanded(!expanded)
+    }
+  }
+
   return (
-    <div className="rounded-xl border border-slate-200/90 bg-white transition-all hover:border-slate-300 hover:shadow-2xs overflow-hidden">
+    <div
+      className={`rounded-xl border bg-white transition-all overflow-hidden ${
+        isActive
+          ? 'border-blue-300 shadow-xs ring-1 ring-blue-100 hover:border-blue-400'
+          : 'border-slate-200/90 hover:border-slate-300 hover:shadow-2xs'
+      }`}
+    >
       <div className="flex items-center justify-between p-3.5 gap-4 select-none">
         {/* 左侧可点击区域：封面、提示词与信息 */}
         <div
           className="flex items-center gap-3.5 min-w-0 flex-1 cursor-pointer"
-          onClick={() => setExpanded(!expanded)}
+          onClick={handleCardClick}
         >
           {/* 封面缩略图 */}
-          <div className="size-12 rounded-lg bg-slate-100 overflow-hidden shrink-0 border border-slate-200/60 flex items-center justify-center">
-            {run.cover_url ? (
+          <div
+            className={`size-12 rounded-lg overflow-hidden shrink-0 border flex items-center justify-center ${
+              isActive
+                ? 'bg-blue-50/80 border-blue-200'
+                : 'bg-slate-100 border-slate-200/60'
+            }`}
+          >
+            {isActive ? (
+              <LoadingOutlined className="text-blue-600 text-lg" />
+            ) : run.cover_url ? (
               <img src={run.cover_url} alt="" className="size-full object-cover" />
             ) : (
               <PictureOutlined className="text-slate-400 text-lg" />
@@ -196,15 +224,33 @@ function RunHistoryItem({
           </div>
           {/* 提示词标题与元信息 */}
           <div className="min-w-0">
-            <h3 className="text-sm font-bold text-slate-900 truncate m-0 leading-snug">
-              {promptText}
-            </h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-900 truncate m-0 leading-snug">
+                {promptText}
+              </h3>
+              {isActive && (
+                <span className="rounded bg-blue-100/80 text-blue-700 px-1.5 py-0.2 text-[10px] font-semibold shrink-0 animate-pulse">
+                  {run.status === 'queued' ? '排队中' : `生成中 ${run.progress}%`}
+                </span>
+              )}
+              {isFailed && (
+                <span className="rounded bg-red-100/80 text-red-700 px-1.5 py-0.2 text-[10px] font-semibold shrink-0">
+                  生成失败
+                </span>
+              )}
+            </div>
             <p className="text-xs text-slate-400 m-0 mt-1 flex items-center gap-1.5">
               <span>{count} 张</span>
               {timeStr && (
                 <>
                   <span>·</span>
                   <span>{timeStr}</span>
+                </>
+              )}
+              {isActive && (
+                <>
+                  <span>·</span>
+                  <span className="text-blue-600 font-medium">点击返回实时进度</span>
                 </>
               )}
             </p>
@@ -241,26 +287,37 @@ function RunHistoryItem({
             </button>
           </Popconfirm>
 
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              setExpanded(!expanded)
-            }}
-            className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 font-medium px-2 py-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
-          >
-            {expanded ? (
-              <>
-                <span>收起</span>
-                <UpOutlined className="text-[10px]" />
-              </>
-            ) : (
-              <>
-                <span>展开</span>
-                <DownOutlined className="text-[10px]" />
-              </>
-            )}
-          </button>
+          {isActive ? (
+            <button
+              type="button"
+              onClick={() => navigate(`/candidates/${run.id}`)}
+              className="flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 font-medium px-2 py-1 rounded bg-blue-50/60 hover:bg-blue-100/60 transition-colors cursor-pointer"
+            >
+              <span>查看进度</span>
+              <RightOutlined className="text-[9px]" />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                setExpanded(!expanded)
+              }}
+              className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 font-medium px-2 py-1 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              {expanded ? (
+                <>
+                  <span>收起</span>
+                  <UpOutlined className="text-[10px]" />
+                </>
+              ) : (
+                <>
+                  <span>展开</span>
+                  <DownOutlined className="text-[10px]" />
+                </>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -347,10 +404,18 @@ export default function CreatePage() {
     })
   }, [location, navigate])
 
-  // 历史任务列表：只查询文生图任务，且只取最近 5 条展示，保证页面紧凑利落
+  // 历史任务列表：只查询文生图任务，且只取最近 5 条展示，保证页面紧凑利落。
+  // 若存在排队/生成中的活跃任务，开启 3 秒轮询，实时同步生成进度
   const runs = useQuery({
     queryKey: ['runs', 'text_to_image'],
     queryFn: () => listRuns({ tool: 'text_to_image', limit: 5 }),
+    refetchInterval: (query) => {
+      const items = query.state.data ?? []
+      const hasActive = items.some(
+        (r) => r.status === 'queued' || r.status === 'running',
+      )
+      return hasActive ? 3000 : false
+    },
   })
   const invalidateRuns = () => {
     queryClient.invalidateQueries({ queryKey: ['runs'] })
@@ -363,8 +428,10 @@ export default function CreatePage() {
     mutationFn: () => createTextToImage({ prompt: prompt.trim(), size, n: count }),
     onSuccess: (run: RunOut) => {
       setError(null)
+      const currentPrompt = prompt.trim()
       setPrompt('')
       invalidateRuns()
+      useTaskStore.getState().setActiveTask({ runId: run.id, prompt: currentPrompt })
       navigate(`/candidates/${run.id}`)
     },
     onError: (err: Error) => setError(err.message),

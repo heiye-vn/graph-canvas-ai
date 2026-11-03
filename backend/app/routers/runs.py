@@ -137,8 +137,9 @@ async def list_runs(
             except ValueError:
                 pass
 
-        # 方案 A：面向创作流的历史素材，只展示成功出图且产物图片在素材库依然存活有效的任务
-        if tool == TOOL_TEXT_TO_IMAGE and (r.status != SUCCEEDED or not valid_ids):
+        # 面向创作流的历史素材：只展示正在排队/生成中的活跃任务，或者成功出图且产物在素材库依然存活的任务
+        is_active = r.status in ("queued", "running")
+        if tool == TOOL_TEXT_TO_IMAGE and not is_active and (r.status != SUCCEEDED or not valid_ids):
             continue
 
         if valid_ids:
