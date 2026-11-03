@@ -16,9 +16,10 @@
 
 import { useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
-import { Alert, Button, Form, Input } from 'antd'
+import { Button, Form, Input, message } from 'antd'
 import { ArrowLeftOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
 
+import { ApiError } from '@/api/client'
 import BrandMark from '@/components/BrandMark'
 import { APP_TAGLINE } from '@/lib/brand'
 import { useAuthStore } from '@/stores/authStore'
@@ -36,6 +37,34 @@ interface LoginForm {
   password: string
 }
 
+/** 友好化错误提示文案，避免向用户直接暴露 500 等晦涩的技术状态码 */
+function formatAuthError(err: unknown, mode: 'login' | 'register'): string {
+  if (err instanceof ApiError) {
+    if (err.status === 401 || err.status === 403) {
+      return mode === 'login' ? '账号或密码错误，请核对后重试' : '注册认证失败，请稍后重试'
+    }
+    if (err.status === 409) {
+      return '该邮箱已被注册，请直接登录'
+    }
+    if (err.status >= 500) {
+      return '服务器开小差了，请稍后重试'
+    }
+    if (err.message && !err.message.includes('请求失败（500）') && !err.message.includes('请求失败 (500)')) {
+      return err.message
+    }
+  }
+  if (err instanceof Error) {
+    if (err.message.includes('500')) {
+      return '服务器开小差了，请稍后重试'
+    }
+    if (err.message.toLowerCase().includes('network') || err.message.includes('Failed to fetch')) {
+      return '网络连接异常，请检查网络后重试'
+    }
+    return err.message
+  }
+  return mode === 'login' ? '登录失败，请稍后重试' : '注册失败，请稍后重试'
+}
+
 export default function LoginPage() {
   const location = useLocation()
   const { user, loading, signIn, signUp } = useAuthStore()
@@ -51,7 +80,6 @@ export default function LoginPage() {
   // hooks 必须全部在任何提前 return 之前调用
   const [form] = Form.useForm<LoginForm>()
   const [mode, setMode] = useState<'login' | 'register'>('login')
-  const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
   // bootstrap 还没跑完先不渲染表单，避免已登录用户看到登录页闪一下
@@ -71,14 +99,13 @@ export default function LoginPage() {
   }
 
   async function onSubmit(values: LoginForm) {
-    setError(null)
     setSubmitting(true)
     try {
       if (mode === 'login') await signIn(values.email, values.password)
       else await signUp(values.email, values.password)
       // 不在这里 navigate：登录成功会让上面的 user 判定接管跳转（含 prompt 接力）
     } catch (err) {
-      setError(err instanceof Error ? err.message : '操作失败')
+      message.error(formatAuthError(err, mode))
     } finally {
       setSubmitting(false)
     }
@@ -86,7 +113,6 @@ export default function LoginPage() {
 
   function toggleMode() {
     setMode(mode === 'login' ? 'register' : 'login')
-    setError(null)
   }
 
   return (
@@ -150,7 +176,7 @@ export default function LoginPage() {
                   ? [{ min: 8, message: '密码至少 8 位' } as const]
                   : []),
               ]}
-              className="mb-4!"
+              className="mb-5!"
             >
               <Input.Password
                 prefix={<LockOutlined className="text-slate-400 text-xs" />}
@@ -159,17 +185,6 @@ export default function LoginPage() {
                 className="rounded-md!"
               />
             </Form.Item>
-
-            {error && (
-              <Alert
-                className="mb-4 rounded-md text-xs"
-                type="error"
-                showIcon
-                message={error}
-                closable
-                onClose={() => setError(null)}
-              />
-            )}
 
             <Button
               block

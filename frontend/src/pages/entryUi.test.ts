@@ -7,6 +7,7 @@ const fixture = vi.hoisted(() => ({
   navigate: vi.fn(), mutate: vi.fn(), refetch: vi.fn(),
   auth: { user: null as unknown, loading: false, signIn: vi.fn(), signUp: vi.fn() },
   query: { data: undefined as unknown, isLoading: false, isError: false, error: null as Error | null },
+  message: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
 }))
 vi.mock('react', async (original) => ({
   ...await original<typeof import('react')>(),
@@ -35,17 +36,42 @@ vi.mock('@tanstack/react-query', () => ({
   useMutation: () => ({ mutate: fixture.mutate, isPending: false }),
 }))
 vi.mock('@/stores/authStore', () => ({ useAuthStore: () => fixture.auth }))
+vi.mock('@/stores/taskStore', () => ({
+  useTaskStore: Object.assign(
+    (selector?: (s: any) => any) => {
+      const state = {
+        activeTask: null,
+        minimized: false,
+        setActiveTask: vi.fn(),
+        setMinimized: vi.fn(),
+        clearActiveTask: vi.fn(),
+      }
+      return selector ? selector(state) : state
+    },
+    {
+      getState: () => ({
+        activeTask: null,
+        minimized: false,
+        setActiveTask: vi.fn(),
+        setMinimized: vi.fn(),
+        clearActiveTask: vi.fn(),
+      }),
+    },
+  ),
+}))
 vi.mock('@/hooks/useCreateSession', () => ({ useCreateSessionAndEdit: () => ({ mutate: vi.fn() }) }))
 vi.mock('@/hooks/useRunStream', () => ({ useRunStream: () => ({}) }))
 vi.mock('@/hooks/useCotStream', () => ({ useCotStream: () => ({}) }))
 vi.mock('antd', () => ({
-  Alert: 'alert', Button: 'button', Input: Object.assign('input', { TextArea: 'textarea' }),
+  Alert: 'alert', Button: 'button', Input: Object.assign('input', { TextArea: 'textarea', Password: 'password' }),
   Popconfirm: 'popconfirm', Popover: 'popover', Tag: 'tag', Spin: 'spin',
-  Form: Object.assign(() => null, { useForm: () => [{}], Item: 'item' }),
+  Form: Object.assign('form', { useForm: () => [{}], Item: 'item' }),
   Typography: { Text: 'text' }, Modal: 'modal', Empty: 'empty', Collapse: 'collapse',
+  message: fixture.message,
 }))
 
 import ProtectedRoute from '@/components/ProtectedRoute'
+import { ApiError } from '@/api/client'
 import LoginPage from './LoginPage'
 import CreatePage from './CreatePage'
 import AssetsPage from './AssetsPage'
@@ -103,6 +129,26 @@ describe('入口状态接力', () => {
     fixture.location.state = { next }
     fixture.auth.user = { id: 'user' }
     expect((render(LoginPage) as Element).props.to).toBe('/create')
+  })
+
+  it('登录页表单不渲染破坏布局的 Alert，发生异常时通过 message.error 弹出人性化提示', async () => {
+    fixture.auth.user = null
+    const tree = render(LoginPage)
+    const alert = nodes(tree).find((element) => String(element.type) === 'alert')
+    expect(alert).toBeUndefined()
+
+    const formElement = nodes(tree).find((element) => String(element.type) === 'form')
+    expect(formElement).toBeDefined()
+
+    // 500 异常转译为友好提示
+    fixture.auth.signIn.mockRejectedValueOnce(new ApiError(500, '请求失败（500）'))
+    await formElement!.props.onFinish({ email: 'user@example.com', password: 'password' })
+    expect(fixture.message.error).toHaveBeenCalledWith('服务器开小差了，请稍后重试')
+
+    // 401 凭证错误转译为友好提示
+    fixture.auth.signIn.mockRejectedValueOnce(new ApiError(401, 'Unauthorized'))
+    await formElement!.props.onFinish({ email: 'user@example.com', password: 'password' })
+    expect(fixture.message.error).toHaveBeenCalledWith('账号或密码错误，请核对后重试')
   })
 
   it('首页 prompt 只填入不自动生成，并 replace 消费 state、保留其他 state', () => {
